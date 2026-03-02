@@ -55,6 +55,7 @@
   <PropertyGroup>
     <ApplicationIcon>propeller.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <GenerateResourceUsePreserializedResources>true</GenerateResourceUsePreserializedResources>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="System" />
@@ -68,8 +69,15 @@
     <Reference Include="System.Net.Http" />
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Xml" />
+    <Reference Include="System.Resources.Extensions">
+      <HintPath>$(UserProfile)\.nuget\packages\system.resources.extensions\4.6.0\lib\netstandard2.0\System.Resources.Extensions.dll</HintPath>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="System.Resources.Extensions" Version="4.6.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="FanCurve.cs" />
     <Compile Include="Form1.cs">
       <SubType>Form</SubType>
     </Compile>

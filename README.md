@@ -37,3 +37,31 @@ Included `AsusWinIO64.dll` is licenced to `(c) ASUSTek COMPUTER INC.` which can 
 
 [Works on](../../issues/13): 
 - ASUS: VivoBook, ZenBook, TUF Gaming, ROG Strix, ROG Zephyrus, ROG Flow
+
+---
+
+### Modifications
+
+This fork adds temperature-based fan control and UI improvements on top of the original Asus Fan Control:
+
+- **Manual vs Auto mode**  
+  - **Manual:** Fan speed is set by the trackbar (unchanged).  
+  - **Auto:** Fan speed is chosen from fixed temperature ranges; the current CPU temp and resulting fan % are shown in the UI.
+
+- **Fixed temperature ranges (Auto mode)**  
+  - &lt; 35°C → 0% (fans off)  
+  - 35–55°C → 45%  
+  - 55–75°C → 80%  
+  - ≥ 75°C → 100%  
+  "Forbid unsafe settings" (Advanced menu) still applies a 40–99% clamp when enabled.
+
+- **5-second debounce**  
+  In Auto mode, when temperature moves to a new range, the new fan speed is applied only after it has stayed in that range for 5 seconds, to avoid reacting to short spikes.
+
+- **Performance**  
+  Hardware reads (CPU temp, fan RPM) run on a background thread and the refresh timer runs every 5 seconds to reduce system load and keep the UI responsive.
+
+- **UI**  
+  - Temp ranges are shown on separate lines (no truncation).  
+  - Window size is reduced to fit content with less empty space.  
+  - Fixed single-window layout; form does not maximize.

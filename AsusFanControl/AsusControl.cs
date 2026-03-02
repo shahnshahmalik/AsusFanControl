@@ -1,4 +1,4 @@
-﻿using AsusSystemAnalysis;
+using AsusSystemAnalysis;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -77,6 +77,19 @@ namespace AsusFanControl
         public ulong Thermal_Read_Cpu_Temperature()
         {
             return AsusWinIO64.Thermal_Read_Cpu_Temperature();
+        }
+
+        /// <summary>
+        /// Returns CPU temperature in Celsius, or -1 if invalid/unavailable.
+        /// </summary>
+        public int GetCpuTemperatureCelsius()
+        {
+            ulong raw = Thermal_Read_Cpu_Temperature();
+            if (raw > 100000 || raw == 0x7FFFFFFF) return -1;
+            if (raw < 200) return (int)Math.Min(raw, 150);
+            int celsius = (int)Math.Round((raw / 10.0) - 273.15);
+            if (celsius < -50 || celsius > 150) return -1;
+            return celsius;
         }
     }
 }
