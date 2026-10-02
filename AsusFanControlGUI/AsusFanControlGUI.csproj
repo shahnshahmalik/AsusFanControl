@@ -78,6 +78,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="FanCurve.cs" />
+    <Compile Include="WindowsStartup.cs" />
     <Compile Include="Form1.cs">
       <SubType>Form</SubType>
     </Compile>
