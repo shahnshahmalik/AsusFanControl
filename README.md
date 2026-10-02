@@ -46,22 +46,30 @@ This fork adds temperature-based fan control and UI improvements on top of the o
 
 - **Manual vs Auto mode**  
   - **Manual:** Fan speed is set by the trackbar (unchanged).  
-  - **Auto:** Fan speed is chosen from fixed temperature ranges; the current CPU temp and resulting fan % are shown in the UI.
+  - **Auto:** Fan speed follows a temperature curve. The window shows CPU temperature, GPU temperature, and the fan percent that curve produces.
 
-- **Fixed temperature ranges (Auto mode)**  
+- **Fan curve setpoints (Auto mode)**  
+  Choose **2 or 3 setpoints**. Each setpoint is a temperature (°C) and a fan percent. Below the first setpoint the fans stay off; at each setpoint that percent turns on and holds until the next one. The default 3-point curve matches the previous fixed ranges:  
   - &lt; 35°C → 0% (fans off)  
-  - 35–55°C → 45%  
-  - 55–75°C → 80%  
-  - ≥ 75°C → 100%  
+  - 35°C → 45%  
+  - 55°C → 80%  
+  - 75°C → 100%  
+  **Edit** switches between a CPU curve and a GPU curve. **Use GPU curve** applies both, and the fans run at whichever curve requests the higher speed. GPU temperature comes from the same `AsusWinIO64.dll` the app already uses (`Thermal_Read_GpuTS1L_Temperature`, or `Thermal_Read_GpuTS1R_Temperature` when the left sensor has no reading). Laptops without that sensor show GPU as N/A and keep using the CPU curve. Every fan still receives the same percent; this library path does not expose separate CPU and GPU fan channels.  
   "Forbid unsafe settings" (Advanced menu) still applies a 40–99% clamp when enabled.
 
 - **5-second debounce**  
-  In Auto mode, when temperature moves to a new range, the new fan speed is applied only after it has stayed in that range for 5 seconds, to avoid reacting to short spikes.
+  In Auto mode, when the curve result moves to a new fan percent, that percent is applied only after it has stayed there for 5 seconds, to avoid reacting to short spikes. Changing setpoints, mode, or the refresh button still applies immediately.
+
+- **Start with Windows**  
+  Advanced → **Start with Windows** registers a logon task named `AsusFanControlGUI` that launches the app with highest privileges. If Task Scheduler cannot create the task, the current user's Run key is used instead (that path can show a UAC prompt at logon). Turning the option off removes both. A second copy does not start if the app is already running.
+
+- **Fans off in sleep**  
+  Advanced → **Turn fans off on sleep** (on by default). Fan control holds ASUS test mode, which is what leaves the fans spinning through sleep. On suspend or hibernate the app clears test mode so the laptop can stop the fans, then applies Manual or Auto again on wake. Uncheck the option to leave test mode set while the machine sleeps.
 
 - **Performance**  
   Hardware reads (CPU temp, fan RPM) run on a background thread and the refresh timer runs every 5 seconds to reduce system load and keep the UI responsive.
 
 - **UI**  
-  - Temp ranges are shown on separate lines (no truncation).  
-  - Window size is reduced to fit content with less empty space.  
+  - Auto mode edits 2 or 3 setpoints in the same window. Manual mode uses a shorter window.  
+  - CPU and GPU temperature are shown under the fan RPM.  
   - Fixed single-window layout; form does not maximize.
