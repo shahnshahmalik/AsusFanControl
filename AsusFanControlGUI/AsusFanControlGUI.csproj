@@ -72,6 +72,25 @@
     <Reference Include="System.Resources.Extensions">
       <HintPath>$(UserProfile)\.nuget\packages\system.resources.extensions\4.6.0\lib\netstandard2.0\System.Resources.Extensions.dll</HintPath>
     </Reference>
+    <!-- Runtime assemblies for System.Resources.Extensions on .NET Framework.
+         The PackageReference restores them, but only this direct reference copies
+         them beside the exe the way System.Resources.Extensions.dll is copied. -->
+    <Reference Include="System.Memory">
+      <HintPath>$(UserProfile)\.nuget\packages\system.memory\4.5.3\lib\netstandard2.0\System.Memory.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="System.Buffers">
+      <HintPath>$(UserProfile)\.nuget\packages\system.buffers\4.4.0\lib\netstandard2.0\System.Buffers.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="System.Numerics.Vectors">
+      <HintPath>$(UserProfile)\.nuget\packages\system.numerics.vectors\4.4.0\lib\net46\System.Numerics.Vectors.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="System.Runtime.CompilerServices.Unsafe">
+      <HintPath>$(UserProfile)\.nuget\packages\system.runtime.compilerservices.unsafe\4.5.2\lib\netstandard2.0\System.Runtime.CompilerServices.Unsafe.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="System.Resources.Extensions" Version="4.6.0" />
