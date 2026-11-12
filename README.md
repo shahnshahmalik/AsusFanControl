@@ -21,7 +21,9 @@ GUI: `AsusFanControlGUI.exe`
 
 After building (e.g. Release | x64), the output folder `bin\x64\Release\` contains the exes and `run.bat`. Double‑click `run.bat` to launch the GUI with admin rights (it uses PsExec if present). To have PsExec copied automatically, place `PsExec.exe` in the `AsusFanControlGUI` project folder once; then every build will copy it to the output folder.
 
-![AsusFanControlGUI](https://github.com/Karmel0x/AsusFanControl/assets/25367564/fe197ad0-7079-4d51-ae78-177cb6369e96)
+| Auto (fan curve) | Manual |
+|---|---|
+| ![Auto mode](docs/asusfancontrol-auto.png) | ![Manual mode](docs/asusfancontrol-manual.png) |
 
 ### Why need it?
 My laptop does not support the [Fan Profile](https://github.com/Karmel0x/AsusFanControl/assets/25367564/924d990a-bf20-4b8d-bf9d-56c460174d99) option, but it often overheats. Looked for apps to control fans, but none is working.
