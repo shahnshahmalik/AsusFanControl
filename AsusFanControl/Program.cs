@@ -36,7 +36,9 @@ namespace AsusFanControl
                 {
                     var newSpeedStr = arg.Split('=')[1];
                     var newSpeed = int.Parse(newSpeedStr);
-                    asusControl.SetFanSpeeds(newSpeed);
+                    // Synchronous: the async variant returns after the first fan, and the
+                    // process exits before the remaining fans are set.
+                    asusControl.SetFanSpeedsNow(newSpeed);
 
                     if(newSpeed == 0)
                         Console.WriteLine("Test mode turned off");

@@ -80,10 +80,47 @@ namespace AsusFanControl
             }
         }
 
+        /// <summary>
+        /// Sets every fan to <paramref name="percent"/> with test mode kept on, so 0 stops
+        /// the fans instead of handing them back to the firmware.
+        /// </summary>
+        public void SetFanDutyNow(int percent)
+        {
+            if (percent < 0) percent = 0;
+            if (percent > 100) percent = 100;
+            var value = (byte)Math.Round(percent * 2.55);
+            lock (_ioLock)
+            {
+                _controlGeneration++;
+                var fanCount = AsusWinIO64.HealthyTable_FanCounts();
+                for (byte fanIndex = 0; fanIndex < fanCount; fanIndex++)
+                    ApplyFanSpeed(value, fanIndex, true);
+            }
+        }
+
+        /// <summary>
+        /// Turns test mode off on every fan so the firmware's own fan control takes over.
+        /// </summary>
+        public void ReleaseFanControlNow()
+        {
+            lock (_ioLock)
+            {
+                _controlGeneration++;
+                var fanCount = AsusWinIO64.HealthyTable_FanCounts();
+                for (byte fanIndex = 0; fanIndex < fanCount; fanIndex++)
+                    ApplyFanSpeed(0, fanIndex, false);
+            }
+        }
+
         void ApplyFanSpeed(byte value, byte fanIndex)
         {
+            ApplyFanSpeed(value, fanIndex, value > 0);
+        }
+
+        void ApplyFanSpeed(byte value, byte fanIndex, bool testMode)
+        {
             AsusWinIO64.HealthyTable_SetFanIndex(fanIndex);
-            AsusWinIO64.HealthyTable_SetFanTestMode((char)(value > 0 ? 0x01 : 0x00));
+            AsusWinIO64.HealthyTable_SetFanTestMode((char)(testMode ? 0x01 : 0x00));
             AsusWinIO64.HealthyTable_SetFanPwmDuty(value);
         }
 
