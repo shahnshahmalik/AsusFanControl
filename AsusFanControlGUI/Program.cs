@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -6,26 +7,29 @@ namespace AsusFanControlGUI
 {
     internal static class Program
     {
-        static Mutex _singleInstance;
+        // Global\ so copies in different sessions see each other, e.g. one started as
+        // SYSTEM by run.bat or the logon task and one started by hand.
+        const string MutexName = @"Global\AsusFanControlGUI";
 
         /// <summary>
         /// The main entry point for the application.
         /// </summary>
         [STAThread]
-        static void Main()
+        static void Main(string[] args)
         {
-            bool createdNew = true;
+            bool startMinimized = args.Any(a =>
+                string.Equals(a, WindowsStartup.StartMinimizedArgument, StringComparison.OrdinalIgnoreCase));
+
+            Mutex mutex = null;
+            bool createdNew;
             try
             {
-                _singleInstance = new Mutex(true, @"Local\AsusFanControlGUI", out createdNew);
-            }
-            catch (AbandonedMutexException)
-            {
-                createdNew = true;
+                mutex = new Mutex(true, MutexName, out createdNew);
             }
             catch (UnauthorizedAccessException)
             {
-                createdNew = true;
+                // Another account (e.g. SYSTEM) owns it, so a copy is already running.
+                createdNew = false;
             }
 
             Application.EnableVisualStyles();
@@ -33,16 +37,41 @@ namespace AsusFanControlGUI
 
             if (!createdNew)
             {
-                MessageBox.Show(
-                    "Asus Fan Control is already running.",
-                    "Asus Fan Control",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
+                // A second automatic start (boot and logon tasks) should stay silent.
+                if (!startMinimized)
+                {
+                    MessageBox.Show(
+                        "Asus Fan Control is already running. Look for its icon in the notification area.",
+                        "Asus Fan Control",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                }
                 return;
             }
 
-            Application.Run(new Form1());
-            GC.KeepAlive(_singleInstance);
+            MainForm form = null;
+            Application.ThreadException += (s, e) => OnCrash(form, e.Exception);
+            AppDomain.CurrentDomain.UnhandledException += (s, e) => OnCrash(form, e.ExceptionObject as Exception);
+
+            Log.Write("Started" + (startMinimized ? " (minimized)" : "") + " as " + Environment.UserName);
+            form = new MainForm(startMinimized);
+            Application.Run(form);
+            GC.KeepAlive(mutex);
+        }
+
+        static void OnCrash(MainForm form, Exception ex)
+        {
+            Log.Write("Unexpected error: " + ex);
+            // The fans may be stopped (0%); never leave them that way without the app.
+            if (form != null)
+                form.EmergencyRelease();
+            MessageBox.Show(
+                "Asus Fan Control hit an unexpected error and has handed the fans back to the BIOS.\r\n\r\n"
+                    + (ex != null ? ex.Message : "") + "\r\n\r\nDetails are in " + Log.FilePath,
+                "Asus Fan Control",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            Environment.Exit(1);
         }
     }
 }

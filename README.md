@@ -40,36 +40,22 @@ Included `AsusWinIO64.dll` is licenced to `(c) ASUSTek COMPUTER INC.` which can 
 
 ---
 
-### Modifications
+### GUI features
 
-This fork adds temperature-based fan control and UI improvements on top of the original Asus Fan Control:
+- **Manual and Auto mode.** Manual holds one fan speed. Auto follows a temperature curve. The top of the window always shows CPU and GPU temperature, fan RPM and the speed being applied.
 
-- **Manual vs Auto mode**  
-  - **Manual:** Fan speed is set by the trackbar (unchanged).  
-  - **Auto:** Fan speed follows a temperature curve. The window shows CPU temperature, GPU temperature, and the fan percent that curve produces.
+- **Fan curve profiles.** A profile has 2 or 3 steps; each step is a temperature and a fan speed that applies from that temperature up to the next step. Below the first step the fans are off. *Balanced*, *Quiet* and *Performance* are included; **New…** copies the current profile, and profiles can be renamed or deleted. The tray menu switches profiles too. A preview shows the curve with the current temperature.
 
-- **Fan curve setpoints (Auto mode)**  
-  Choose **2 or 3 setpoints**. Each setpoint is a temperature (°C) and a fan percent. Below the first setpoint the fans stay off; at each setpoint that percent turns on and holds until the next one. The default 3-point curve matches the previous fixed ranges:  
-  - &lt; 35°C → 0% (fans off)  
-  - 35°C → 45%  
-  - 55°C → 80%  
-  - 75°C → 100%  
-  **Edit** switches between a CPU curve and a GPU curve. **Use GPU curve** applies both, and the fans run at whichever curve requests the higher speed. GPU temperature comes from the same `AsusWinIO64.dll` the app already uses (`Thermal_Read_GpuTS1L_Temperature`, or `Thermal_Read_GpuTS1R_Temperature` when the left sensor has no reading). Laptops without that sensor show GPU as N/A and keep using the CPU curve. Every fan still receives the same percent; this library path does not expose separate CPU and GPU fan channels.  
-  "Forbid unsafe settings" (Advanced menu) still applies a 40–99% clamp when enabled.
+- **GPU curve.** Tick **Also follow GPU temperature** to give the profile a second curve; the fans run at whichever curve asks for more. GPU temperature comes from `AsusWinIO64.dll` (`Thermal_Read_GpuTS1L_Temperature`, or `TS1R` when the left sensor has no reading). All fans get the same speed.
 
-- **5-second debounce**  
-  In Auto mode, when the curve result moves to a new fan percent, that percent is applied only after it has stayed there for 5 seconds, to avoid reacting to short spikes. Changing setpoints, mode, or the refresh button still applies immediately.
+- **What 0% means.** In the GUI, 0% stops the fans (test mode on, duty 0). Unticking **Control fans** hands the fans back to the BIOS (test mode off). If no temperature can be read, Auto mode hands the fans to the BIOS as well. The command line keeps its old meaning: `--set-fan-speeds=0` turns test mode off.
 
-- **Start with Windows**  
-  Advanced → **Start with Windows** registers a logon task named `AsusFanControlGUI` that launches the app with highest privileges. If Task Scheduler cannot create the task, the current user's Run key is used instead (that path can show a UAC prompt at logon). Turning the option off removes both. A second copy does not start if the app is already running.
+- **Steadier control.** A new curve speed is applied once the temperature has stayed in a step for 5 seconds; your own changes apply at once. The EC can drop out of test mode on its own (for example around Modern Standby), so the app re-sends the current speed every 15 seconds.
 
-- **Fans off in sleep**  
-  Advanced → **Turn fans off on sleep** (on by default). Fan control holds ASUS test mode, which is what leaves the fans spinning through sleep. On suspend or hibernate the app clears test mode so the laptop can stop the fans, then applies Manual or Auto again on wake. Uncheck the option to leave test mode set while the machine sleeps.
+- **Sleep.** Sleep is detected for classic sleep and for Modern Standby, which often does not send the usual suspend notification. **Settings → Hand fans to the BIOS during sleep** (on by default) releases the fans while asleep; with it off, the current speed is kept. On wake the speed is applied again.
 
-- **Performance**  
-  Hardware reads (CPU temp, fan RPM) run on a background thread and the refresh timer runs every 5 seconds to reduce system load and keep the UI responsive.
+- **Start with Windows.** Creates a logon task named `AsusFanControlGUI` for the signed-in user, also when the app runs as SYSTEM. It starts on battery, has no time limit, starts the app in the notification area, and uses `PsExec.exe` from the app folder when present (some laptops only allow fan control from SYSTEM, as with `run.bat`). Only one copy runs at a time.
 
-- **UI**  
-  - Auto mode edits 2 or 3 setpoints in the same window. Manual mode uses a shorter window.  
-  - CPU and GPU temperature are shown under the fan RPM.  
-  - Fixed single-window layout; form does not maximize.
+- **Settings.** Settings and profiles are saved in `%ProgramData%\AsusFanControl\settings.json`, shared by every account, so they survive restarts, running as SYSTEM and unzipping a new release elsewhere. Settings from earlier versions are imported on first run. `log.txt` in the same folder records starts, sleep/wake and fan changes; **Settings → Open settings and log folder** opens it.
+
+- **Other settings.** Keep running in the notification area when closed, hand fans to the BIOS on exit, and limit non-zero speeds to 40–99%.

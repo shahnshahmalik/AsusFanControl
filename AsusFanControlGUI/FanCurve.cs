@@ -1,13 +1,17 @@
 using System;
+using System.Runtime.Serialization;
 
 namespace AsusFanControlGUI
 {
     /// <summary>
     /// One step on a fan curve: at this temperature, this fan percent turns on.
     /// </summary>
+    [DataContract]
     public struct FanSetpoint
     {
+        [DataMember(Name = "tempC", Order = 0)]
         public int TemperatureC;
+        [DataMember(Name = "fanPercent", Order = 1)]
         public int FanPercent;
 
         public FanSetpoint(int temperatureC, int fanPercent)
@@ -18,9 +22,9 @@ namespace AsusFanControlGUI
     }
 
     /// <summary>
-    /// Step curve used by Auto mode. Below the first setpoint the fans stay off.
+    /// Step curve used by Auto mode. Below the first setpoint the fans are off (0%).
     /// From each setpoint up to the next, that setpoint's percent is held.
-    /// Defaults match the previous fixed ranges: 35°C→45%, 55°C→80%, 75°C→100%.
+    /// The "Balanced" defaults match the previous fixed ranges: 35°C→45%, 55°C→80%, 75°C→100%.
     /// </summary>
     public static class FanCurve
     {
