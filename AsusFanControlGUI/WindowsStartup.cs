@@ -17,13 +17,15 @@ namespace AsusFanControlGUI
     /// does when started through run.bat / PsExec -s); a task created for SYSTEM would
     /// never show a window at logon. The task is created from XML so it also starts on
     /// battery and is not stopped after the default three-day limit. When PsExec.exe is
-    /// next to the exe, the task launches the GUI through it as SYSTEM, like run.bat,
-    /// because some machines only allow EC access from SYSTEM.
+    /// next to the exe, the task starts the GUI with --as-system and the GUI relaunches
+    /// itself through PsExec as SYSTEM (hidden), like run.bat, because some machines
+    /// only allow EC access from SYSTEM.
     /// </summary>
     static class WindowsStartup
     {
         public const string TaskName = "AsusFanControlGUI";
         public const string StartMinimizedArgument = "--minimized";
+        public const string AsSystemArgument = "--as-system";
         const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
         const string RunValueName = "AsusFanControlGUI";
 
@@ -46,19 +48,13 @@ namespace AsusFanControlGUI
             }
 
             string directory = Path.GetDirectoryName(exe);
-            string psexec = Path.Combine(directory, "PsExec.exe");
-            string command;
-            string arguments;
-            if (File.Exists(psexec))
-            {
-                command = psexec;
-                arguments = "-accepteula -nobanner -i -s -d \"" + exe + "\" " + StartMinimizedArgument;
-            }
-            else
-            {
-                command = exe;
-                arguments = StartMinimizedArgument;
-            }
+            // The task always starts the GUI exe (a windowed app). Starting PsExec.exe
+            // directly would open a console window at logon, so the GUI starts PsExec
+            // itself with no window (see TryRelaunchAsSystem).
+            string command = exe;
+            string arguments = File.Exists(PsExecPath())
+                ? AsSystemArgument + " " + StartMinimizedArgument
+                : StartMinimizedArgument;
 
             string xmlPath = Path.Combine(Path.GetTempPath(), "AsusFanControlGUI-task.xml");
             try
@@ -86,6 +82,65 @@ namespace AsusFanControlGUI
             RemoveRunValue();
             Log.Write("Start with Windows: task created for " + user);
             return true;
+        }
+
+        static string PsExecPath()
+        {
+            return Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "PsExec.exe");
+        }
+
+        /// <summary>
+        /// Starts this exe again as SYSTEM in the current session through PsExec, with no
+        /// console window. Returns false (so the caller should keep running as itself)
+        /// when already SYSTEM, PsExec.exe is missing, or PsExec could not be started.
+        /// </summary>
+        public static bool TryRelaunchAsSystem(bool startMinimized)
+        {
+            using (var identity = WindowsIdentity.GetCurrent())
+            {
+                if (identity.IsSystem)
+                    return false;
+            }
+
+            string psexec = PsExecPath();
+            if (!File.Exists(psexec))
+            {
+                Log.Write("Start as SYSTEM: PsExec.exe not found, running as " + Environment.UserName);
+                return false;
+            }
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = psexec,
+                Arguments = "-accepteula -nobanner -i " + Process.GetCurrentProcess().SessionId
+                    + " -s -d \"" + Application.ExecutablePath + "\""
+                    + (startMinimized ? " " + StartMinimizedArgument : ""),
+                WorkingDirectory = Path.GetDirectoryName(psexec),
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
+            };
+
+            try
+            {
+                using (Process process = Process.Start(startInfo))
+                {
+                    if (process == null)
+                        return false;
+                    // With -d PsExec returns once the new process has started.
+                    if (!process.WaitForExit(30000))
+                    {
+                        Log.Write("Start as SYSTEM: PsExec did not finish in time");
+                        return false;
+                    }
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Start as SYSTEM: " + ex.Message);
+                return false;
+            }
         }
 
         public static void Disable()

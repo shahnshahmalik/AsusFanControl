@@ -19,6 +19,21 @@ namespace AsusFanControlGUI
         {
             bool startMinimized = args.Any(a =>
                 string.Equals(a, WindowsStartup.StartMinimizedArgument, StringComparison.OrdinalIgnoreCase));
+            bool asSystem = args.Any(a =>
+                string.Equals(a, WindowsStartup.AsSystemArgument, StringComparison.OrdinalIgnoreCase));
+
+            // The logon task starts us as the user; hand over to a SYSTEM copy (like
+            // run.bat) and exit once it is up. If it never appears, keep running here.
+            if (asSystem && !IsRunning() && WindowsStartup.TryRelaunchAsSystem(startMinimized))
+            {
+                for (int i = 0; i < 40; i++)
+                {
+                    if (IsRunning())
+                        return;
+                    Thread.Sleep(250);
+                }
+                Log.Write("Start as SYSTEM: the SYSTEM copy did not start, running as " + Environment.UserName);
+            }
 
             Mutex mutex = null;
             bool createdNew;
@@ -57,6 +72,23 @@ namespace AsusFanControlGUI
             form = new MainForm(startMinimized);
             Application.Run(form);
             GC.KeepAlive(mutex);
+        }
+
+        static bool IsRunning()
+        {
+            try
+            {
+                Mutex existing;
+                if (!Mutex.TryOpenExisting(MutexName, out existing))
+                    return false;
+                existing.Dispose();
+                return true;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Owned by another account (e.g. SYSTEM), so it exists.
+                return true;
+            }
         }
 
         static void OnCrash(MainForm form, Exception ex)
