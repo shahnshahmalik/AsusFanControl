@@ -46,7 +46,9 @@ Included `AsusWinIO64.dll` is licenced to `(c) ASUSTek COMPUTER INC.` which can 
 
 - **Manual and Auto mode.** Manual holds one fan speed. Auto follows a temperature curve. The top of the window always shows CPU and GPU temperature, fan RPM and the speed being applied.
 
-- **Fan curve profiles.** A profile has 2 or 3 steps; each step is a temperature and a fan speed that applies from that temperature up to the next step. Below the first step the fans are off. *Balanced*, *Quiet* and *Performance* are included; **New…** copies the current profile, and profiles can be renamed or deleted. The tray menu switches profiles too. A preview shows the curve with the current temperature.
+- **Fan curve profiles.** A profile has 2 or 3 steps; each step is a temperature and a fan speed that applies from that temperature up to the next step. Below the first step the fans are off. *Balanced*, *Quiet* and *Performance* are included; **New…** copies the current profile, and profiles can be renamed or deleted. The tray menu switches profiles too. A graph shows the curve with the current temperature.
+
+- **Edit the curve on the graph.** Click **Edit graph** under the graph, then drag a step's point: left/right sets its temperature, up/down its fan speed. A label shows the values while you drag, and steps cannot be dragged past each other. **Save** applies the new curve; **Cancel** (or Esc) discards it. Typing values in the boxes still works and applies right away.
 
 - **GPU curve.** Tick **Also follow GPU temperature** to give the profile a second curve; the fans run at whichever curve asks for more. GPU temperature comes from `AsusWinIO64.dll` (`Thermal_Read_GpuTS1L_Temperature`, or `TS1R` when the left sensor has no reading). All fans get the same speed.
 

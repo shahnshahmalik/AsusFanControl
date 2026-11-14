@@ -52,6 +52,10 @@ namespace AsusFanControlGUI
         readonly NumericUpDown[] _tempEdits = new NumericUpDown[FanCurve.MaxSetpoints];
         readonly NumericUpDown[] _fanEdits = new NumericUpDown[FanCurve.MaxSetpoints];
         CurvePreview _preview;
+        Button _editGraphButton, _saveGraphButton, _cancelGraphButton;
+        Label _graphHint;
+        bool _graphEditing;
+        bool _graphDirty;
 
         // Tray
         NotifyIcon _tray;
@@ -302,12 +306,34 @@ namespace AsusFanControlGUI
                 grid.Controls.Add(_tempEdits[i], 1, i + 1);
                 grid.Controls.Add(_fanEdits[i], 2, i + 1);
             }
-            _preview = new CurvePreview { Dock = DockStyle.Fill, MinimumSize = new Size(180, 120), Margin = new Padding(0, 4, 0, 0) };
+            _preview = new CurvePreview { Dock = DockStyle.Fill, MinimumSize = new Size(220, 140), Margin = new Padding(0, 4, 0, 0) };
+            _preview.PointsChanged += OnGraphDragged;
+
+            // Graph with its Edit / Save / Cancel buttons underneath
+            var graphPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoSize = true, Margin = new Padding(0) };
+            var graphButtons = Flow();
+            _editGraphButton = SmallButton("Edit graph", (s, e) => BeginGraphEdit());
+            _saveGraphButton = SmallButton("Save", (s, e) => EndGraphEdit(true));
+            _cancelGraphButton = SmallButton("Cancel", (s, e) => EndGraphEdit(false));
+            _saveGraphButton.Visible = false;
+            _cancelGraphButton.Visible = false;
+            _graphHint = new Label
+            {
+                Text = "Drag the points",
+                AutoSize = true,
+                ForeColor = SystemColors.GrayText,
+                Margin = new Padding(6, 8, 3, 3),
+                Visible = false,
+            };
+            graphButtons.Controls.AddRange(new Control[] { _editGraphButton, _saveGraphButton, _cancelGraphButton, _graphHint });
+            graphPanel.Controls.Add(_preview, 0, 0);
+            graphPanel.Controls.Add(graphButtons, 0, 1);
+
             body.Controls.Add(grid, 0, 0);
-            body.Controls.Add(_preview, 1, 0);
+            body.Controls.Add(graphPanel, 1, 0);
             table.Controls.Add(body);
 
-            table.Controls.Add(Hint("Below the first step the fans are off. A new speed is applied once the temperature has stayed in a step for 5 seconds; changes you make apply right away."));
+            table.Controls.Add(Hint("Below the first step the fans are off. A new speed is applied once the temperature has stayed in a step for 5 seconds. Typed changes apply right away; graph changes apply when you click Save."));
             group.Controls.Add(table);
             return group;
         }
@@ -458,7 +484,8 @@ namespace AsusFanControlGUI
         /// </summary>
         void FlushTypedValues()
         {
-            if (_loading)
+            // While the graph is being edited the boxes mirror unsaved drag changes.
+            if (_loading || _graphEditing)
                 return;
             foreach (var numeric in _tempEdits.Concat(_fanEdits))
             {
@@ -468,12 +495,132 @@ namespace AsusFanControlGUI
 
         void OnCurveEdited(object sender, EventArgs e)
         {
-            if (_loading || _updatingEditors)
+            if (_loading || _updatingEditors || _graphEditing)
                 return;
             CommitEditors();
             PushProfileToEditors();
             _settings.Save();
             ApplyToController();
+        }
+
+        // ---------------------------------------------------------------- graph editing
+
+        void BeginGraphEdit()
+        {
+            if (_graphEditing)
+                return;
+            FlushTypedValues();
+            _graphEditing = true;
+            _graphDirty = false;
+            UpdatePreview();
+            _preview.Editing = true;
+            UpdateGraphEditControls();
+            Log.Write("Graph edit started (" + _settings.ActiveProfile.Name + ", " + (_editGpuRadio.Checked ? "GPU" : "CPU") + ")");
+        }
+
+        /// <summary>Mirrors the dragged points into the number boxes without saving.</summary>
+        void OnGraphDragged(object sender, EventArgs e)
+        {
+            if (!_graphEditing)
+                return;
+            _graphDirty = true;
+            var points = _preview.Points;
+            _updatingEditors = true;
+            try
+            {
+                for (int i = 0; i < _settings.ActiveProfile.PointCount; i++)
+                {
+                    _tempEdits[i].Value = points[i].TemperatureC;
+                    _fanEdits[i].Value = points[i].FanPercent;
+                }
+            }
+            finally
+            {
+                _updatingEditors = false;
+            }
+        }
+
+        /// <summary>Leaves graph editing; <paramref name="save"/> applies the dragged curve.</summary>
+        void EndGraphEdit(bool save)
+        {
+            if (!_graphEditing)
+                return;
+
+            var profile = _settings.ActiveProfile;
+            if (save)
+            {
+                var dragged = _preview.Points;
+                var points = EditedPoints;
+                for (int i = 0; i < profile.PointCount; i++)
+                    points[i] = dragged[i];
+                FanCurve.Normalize(points, profile.PointCount);
+            }
+
+            _graphEditing = false;
+            _graphDirty = false;
+            _preview.Editing = false;
+            UpdateGraphEditControls();
+            PushProfileToEditors();
+
+            if (save)
+            {
+                _settings.Save();
+                ApplyToController();
+                var saved = EditedPoints;
+                Log.Write("Graph edit saved: " + string.Join(", ",
+                    saved.Take(profile.PointCount).Select(p => p.TemperatureC + "°C→" + p.FanPercent + "%")));
+            }
+            else
+            {
+                Log.Write("Graph edit cancelled");
+            }
+        }
+
+        /// <summary>
+        /// Before something replaces the curve on screen (profile switch, mode change,
+        /// closing), finish an open graph edit, asking whether to keep unsaved changes.
+        /// </summary>
+        void ResolveGraphEdit(bool canAsk)
+        {
+            if (!_graphEditing)
+                return;
+            bool save = false;
+            if (_graphDirty && canAsk)
+            {
+                save = MessageBox.Show(this, "Save the changes you made on the graph?", Text,
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
+            }
+            EndGraphEdit(save);
+        }
+
+        void UpdateGraphEditControls()
+        {
+            bool editing = _graphEditing;
+            _editGraphButton.Visible = !editing;
+            _saveGraphButton.Visible = editing;
+            _cancelGraphButton.Visible = editing;
+            _graphHint.Visible = editing;
+
+            // Other curve settings would replace what is being dragged; lock them meanwhile.
+            _profileCombo.Enabled = !editing;
+            _newProfileButton.Enabled = !editing;
+            _renameProfileButton.Enabled = !editing;
+            _deleteProfileButton.Enabled = !editing && _settings.Profiles.Count > 1;
+            _stepsCombo.Enabled = !editing;
+            _useGpuCheck.Enabled = !editing;
+            _editCpuRadio.Enabled = !editing;
+            _editGpuRadio.Enabled = !editing && _settings.ActiveProfile.UseGpu;
+            for (int i = 0; i < FanCurve.MaxSetpoints; i++)
+            {
+                _tempEdits[i].Enabled = !editing;
+                _fanEdits[i].Enabled = !editing;
+            }
+
+            if (editing)
+                AcceptButton = _saveGraphButton;
+            else if (AcceptButton == _saveGraphButton)
+                AcceptButton = null;
+            CancelButton = editing ? _cancelGraphButton : null;
         }
 
         void OnStepsChanged(object sender, EventArgs e)
@@ -540,6 +687,7 @@ namespace AsusFanControlGUI
             var radio = sender as RadioButton;
             if (_loading || radio == null || !radio.Checked)
                 return;
+            ResolveGraphEdit(true);
             _settings.Mode = _autoRadio.Checked ? AppSettings.ModeAuto : AppSettings.ModeManual;
             _settings.Save();
             UpdateModeVisibility();
@@ -556,6 +704,7 @@ namespace AsusFanControlGUI
 
         void SelectProfile(string name)
         {
+            ResolveGraphEdit(Visible);
             _settings.ActiveProfileName = name;
             if (!_settings.IsAuto)
             {
@@ -790,6 +939,7 @@ namespace AsusFanControlGUI
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            ResolveGraphEdit(Visible && e.CloseReason == CloseReason.UserClosing);
             if (!_exiting && e.CloseReason == CloseReason.UserClosing && _settings.MinimizeToTray)
             {
                 e.Cancel = true;
