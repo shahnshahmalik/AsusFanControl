@@ -1,7 +1,12 @@
 # Asus Fan Control
 
 ### Download
-Go to [releases](../../releases)
+Go to [releases](../../releases). Two downloads are offered:
+
+- **`AsusFanControl-Setup-vX.Y.Z.exe`** (recommended): installs into `C:\Program Files\Asus Fan Control`, adds a Start menu shortcut (optionally a desktop one), can turn on Start with Windows, and appears in **Settings → Apps** for uninstalling. Running a newer Setup upgrades in place; it closes the running app first. Uninstalling closes the app (the fans go back to the BIOS), removes Start with Windows, and asks whether to delete your settings. Windows SmartScreen may warn because the installer is not code-signed: choose **More info → Run anyway**.
+- **`AsusFanControl-x64-Release-vX.Y.Z.zip`** (portable): unzip somewhere permanent and double-click `run.bat`.
+
+Settings, profiles and the log are in `C:\ProgramData\AsusFanControl` either way, so they survive updates and switching between the two.
 
 ### Run
 
@@ -20,6 +25,14 @@ Go to [releases](../../releases)
 GUI: `AsusFanControlGUI.exe`  
 
 After building (e.g. Release | x64), the output folder `bin\x64\Release\` contains the exes and `run.bat`. Double‑click `run.bat` to launch the GUI with admin rights (it uses PsExec if present). To have PsExec copied automatically, place `PsExec.exe` in the `AsusFanControlGUI` project folder once; then every build will copy it to the output folder.
+
+GUI command-line options (used by the shortcuts and the installer): `--as-system` restarts the app as SYSTEM through `PsExec.exe` with no console window, `--minimized` starts it in the notification area, `--exit` closes a running copy and hands the fans to the BIOS, and `--startup on|off` turns Start with Windows on or off. Starting the app while it is already running brings its window forward.
+
+**Building the installer:** install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and Visual Studio (MSBuild), then run
+
+    powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1
+
+It builds Release | x64 into an empty folder and writes `AsusFanControl-Setup-vX.Y.Z.exe` and the portable zip to `installer\Output\`. The version comes from `AsusFanControlGUI\Properties\AssemblyInfo.cs`. `PsExec.exe` is not in the repository; the script takes it from `AsusFanControlGUI\PsExec.exe` or `bin\x64\Release\PsExec.exe`, or pass `-PsExec <path>`.
 
 | Auto (fan curve) | Manual |
 |---|---|

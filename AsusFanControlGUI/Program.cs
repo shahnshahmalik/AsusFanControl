@@ -17,6 +17,20 @@ namespace AsusFanControlGUI
         [STAThread]
         static void Main(string[] args)
         {
+            // Used by the installer: close a running copy, or turn Start with Windows on/off.
+            if (HasArgument(args, ExitArgument))
+            {
+                Environment.ExitCode = ExitRunningCopy() ? 0 : 1;
+                return;
+            }
+            int startupIndex = Array.FindIndex(args, a => string.Equals(a, StartupArgument, StringComparison.OrdinalIgnoreCase));
+            if (startupIndex >= 0)
+            {
+                string value = startupIndex + 1 < args.Length ? args[startupIndex + 1] : "";
+                Environment.ExitCode = SetStartWithWindows(string.Equals(value, "on", StringComparison.OrdinalIgnoreCase)) ? 0 : 1;
+                return;
+            }
+
             bool startMinimized = args.Any(a =>
                 string.Equals(a, WindowsStartup.StartMinimizedArgument, StringComparison.OrdinalIgnoreCase));
             bool asSystem = args.Any(a =>
@@ -52,8 +66,9 @@ namespace AsusFanControlGUI
 
             if (!createdNew)
             {
-                // A second automatic start (boot and logon tasks) should stay silent.
-                if (!startMinimized)
+                // A second automatic start (boot and logon tasks) should stay silent; a
+                // start by hand (e.g. the Start menu shortcut) shows the running window.
+                if (!startMinimized && !InstanceSignals.SignalShow())
                 {
                     MessageBox.Show(
                         "Asus Fan Control is already running. Look for its icon in the notification area.",
@@ -72,6 +87,50 @@ namespace AsusFanControlGUI
             form = new MainForm(startMinimized);
             Application.Run(form);
             GC.KeepAlive(mutex);
+        }
+
+        const string ExitArgument = "--exit";
+        const string StartupArgument = "--startup";
+
+        static bool HasArgument(string[] args, string name)
+        {
+            return args.Any(a => string.Equals(a, name, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Asks the running copy to close (it hands the fans to the BIOS) and waits up to
+        /// 15 s. Returns true when no copy is running afterwards.
+        /// </summary>
+        static bool ExitRunningCopy()
+        {
+            if (!IsRunning())
+                return true;
+            if (!InstanceSignals.SignalExit())
+                return false;
+            for (int i = 0; i < 60 && IsRunning(); i++)
+                Thread.Sleep(250);
+            return !IsRunning();
+        }
+
+        static bool SetStartWithWindows(bool enable)
+        {
+            var settings = AppSettings.Load();
+            if (enable)
+            {
+                string error;
+                if (!WindowsStartup.Enable(out error))
+                {
+                    Log.Write("Start with Windows (installer): " + error);
+                    return false;
+                }
+            }
+            else
+            {
+                WindowsStartup.Disable();
+            }
+            settings.StartWithWindows = enable;
+            settings.Save();
+            return true;
         }
 
         static bool IsRunning()

@@ -23,6 +23,8 @@ namespace AsusFanControlGUI
         bool _loading = true;
         bool _updatingEditors;
         bool _exiting;
+        bool _exitRequested;   // by another copy (installer): no questions, fans to BIOS
+        bool _listening;
         FanStatus _lastStatus;
 
         // Menu
@@ -939,7 +941,7 @@ namespace AsusFanControlGUI
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            ResolveGraphEdit(Visible && e.CloseReason == CloseReason.UserClosing);
+            ResolveGraphEdit(Visible && e.CloseReason == CloseReason.UserClosing && !_exitRequested);
             if (!_exiting && e.CloseReason == CloseReason.UserClosing && _settings.MinimizeToTray)
             {
                 e.Cancel = true;
@@ -966,6 +968,35 @@ namespace AsusFanControlGUI
             Close();
         }
 
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            if (_listening)
+                return;
+            _listening = true;
+            InstanceSignals.Listen(
+                () => RunOnUi(ShowWindow),
+                () => RunOnUi(() =>
+                {
+                    Log.Write("Exit requested by another copy (installer)");
+                    _exitRequested = true;
+                    ExitApplication();
+                }));
+        }
+
+        void RunOnUi(Action action)
+        {
+            if (IsDisposed || !IsHandleCreated)
+                return;
+            try
+            {
+                BeginInvoke(action);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+
         void Shutdown()
         {
             if (_tray == null)
@@ -973,7 +1004,8 @@ namespace AsusFanControlGUI
             FlushTypedValues();
             _settings.Save();
             _sleepWatcher.Dispose();
-            _controller.Shutdown(_settings.ReleaseOnExit);
+            InstanceSignals.Stop();
+            _controller.Shutdown(_settings.ReleaseOnExit || _exitRequested);
             _tray.Visible = false;
             _tray.Dispose();
             _tray = null;

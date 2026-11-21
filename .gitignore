@@ -390,3 +390,8 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+# Installer build output
+installer/stage/
+installer/work/
+installer/Output/
