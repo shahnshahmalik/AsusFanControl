@@ -34,9 +34,11 @@ GUI command-line options (used by the shortcuts and the installer): `--as-system
 
 It builds Release | x64 into an empty folder and writes `AsusFanControl-Setup-vX.Y.Z.exe` and the portable zip to `installer\Output\`. The version comes from `AsusFanControlGUI\Properties\AssemblyInfo.cs`. `PsExec.exe` is not in the repository; the script takes it from `AsusFanControlGUI\PsExec.exe` or `bin\x64\Release\PsExec.exe`, or pass `-PsExec <path>`.
 
-| Auto (fan curve) | Manual |
+| Auto (fan curve), Neon Grid theme | Manual |
 |---|---|
-| ![Auto mode](docs/asusfancontrol-auto.png) | ![Manual mode](docs/asusfancontrol-manual.png) |
+| ![Auto mode, Neon Grid theme](docs/asusfancontrol-auto.png) | ![Manual mode](docs/asusfancontrol-manual.png) |
+| **Crimson Strike theme** | **Daylight theme** |
+| ![Auto mode, Crimson Strike theme](docs/asusfancontrol-crimson.png) | ![Auto mode, Daylight theme](docs/asusfancontrol-daylight.png) |
 
 ### Why need it?
 My laptop does not support the [Fan Profile](https://github.com/Karmel0x/AsusFanControl/assets/25367564/924d990a-bf20-4b8d-bf9d-56c460174d99) option, but it often overheats. Looked for apps to control fans, but none is working.
