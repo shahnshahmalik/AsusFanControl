@@ -12,7 +12,7 @@ namespace AsusFanControlGUI
     /// </summary>
     public sealed class MainForm : Form
     {
-        const int ContentWidth = 440;
+        const int ContentWidth = 480;
         const string ProjectUrl = "https://github.com/Karmel0x/AsusFanControl";
 
         readonly AppSettings _settings;
@@ -32,7 +32,9 @@ namespace AsusFanControlGUI
             _menuReleaseOnExit, _menuLimit;
 
         // Status
-        Label _cpuValue, _gpuValue, _fanValue, _targetValue;
+        HeaderBanner _header;
+        StatusHud _hud;
+        ToolStripMenuItem _themeMenu, _settingsMenu, _helpMenu;
         ToolStripStatusLabel _statusText;
 
         // Control
@@ -41,23 +43,22 @@ namespace AsusFanControlGUI
 
         // Manual
         GroupBox _manualGroup;
-        TrackBar _manualTrack;
+        NeonSlider _manualTrack;
         Label _manualValue;
 
         // Curve
         GroupBox _curveGroup;
-        ComboBox _profileCombo, _stepsCombo;
-        Button _newProfileButton, _renameProfileButton, _deleteProfileButton;
+        ComboBox _profileCombo;
+        NeonButton _newProfileButton, _renameProfileButton, _deleteProfileButton;
         CheckBox _useGpuCheck;
         RadioButton _editCpuRadio, _editGpuRadio;
-        readonly Label[] _stepLabels = new Label[FanCurve.MaxSetpoints];
-        readonly NumericUpDown[] _tempEdits = new NumericUpDown[FanCurve.MaxSetpoints];
-        readonly NumericUpDown[] _fanEdits = new NumericUpDown[FanCurve.MaxSetpoints];
         CurvePreview _preview;
-        Button _editGraphButton, _saveGraphButton, _cancelGraphButton;
-        Label _graphHint;
-        bool _graphEditing;
-        bool _graphDirty;
+        NeonButton _saveGraphButton, _cancelGraphButton, _calibrateButton;
+        Label _graphHint, _curveHint;
+        bool _calibrating;
+        System.Threading.CancellationTokenSource _calibrationCancel;
+        string _statusOverride;
+        bool _graphDirty;   // the graph shows changes that are not saved yet
 
         // Tray
         NotifyIcon _tray;
@@ -70,19 +71,30 @@ namespace AsusFanControlGUI
 
             Text = "Asus Fan Control";
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
-            Font = new Font("Segoe UI", 9F);
+            Theme.Set(_settings.Theme);
+            Font = Theme.Body(9F);
             AutoScaleMode = AutoScaleMode.Dpi;
-            FormBorderStyle = FormBorderStyle.FixedSingle;
+            DoubleBuffered = true;
+            // No window border: the header banner is the title bar (see OnHeaderButton).
+            FormBorderStyle = FormBorderStyle.None;
             MaximizeBox = false;
+            Padding = new Padding(1);
             StartPosition = FormStartPosition.CenterScreen;
 
             BuildLayout();
             BuildTray();
+            Theme.Apply(this);
+            ApplyMenus();
+            Theme.Changed += OnThemeChanged;
             LoadIntoControls();
             _loading = false;
 
             _controller.StatusChanged += OnControllerStatus;
-            _sleepWatcher.Sleeping += () => _controller.OnSleep(_settings.ReleaseOnSleep);
+            _sleepWatcher.Sleeping += () =>
+            {
+                CancelCalibration();
+                _controller.OnSleep(_settings.ReleaseOnSleep);
+            };
             _sleepWatcher.Woke += () => _controller.OnWake();
             ApplyToController();
             _controller.Start();
@@ -105,8 +117,7 @@ namespace AsusFanControlGUI
 
         void BuildLayout()
         {
-            var menu = new MenuStrip { Dock = DockStyle.Top };
-            var settingsMenu = new ToolStripMenuItem("&Settings");
+            var settingsMenu = _settingsMenu = new ToolStripMenuItem("&Settings");
             _menuStartWithWindows = CheckItem("Start with Windows", OnStartWithWindowsClicked);
             _menuMinimizeToTray = CheckItem("Keep running in the notification area when closed", (s, e) =>
             {
@@ -130,19 +141,29 @@ namespace AsusFanControlGUI
                 UpdateManualLabel();
                 ApplyToController();
             });
+            _themeMenu = new ToolStripMenuItem("Theme");
+            foreach (var palette in Theme.Palettes)
+            {
+                string name = palette.Name;
+                _themeMenu.DropDownItems.Add(new ToolStripMenuItem(name, null, (s, e) =>
+                {
+                    _settings.Theme = name;
+                    _settings.Save();
+                    Theme.Set(name);
+                }) { Checked = name == Theme.Current.Name });
+            }
             settingsMenu.DropDownItems.AddRange(new ToolStripItem[]
             {
                 _menuStartWithWindows, _menuMinimizeToTray, new ToolStripSeparator(),
                 _menuReleaseOnSleep, _menuReleaseOnExit, _menuLimit, new ToolStripSeparator(),
+                _themeMenu, new ToolStripSeparator(),
                 new ToolStripMenuItem("Open settings and log folder", null, (s, e) => OpenDataFolder()),
                 new ToolStripSeparator(),
                 new ToolStripMenuItem("E&xit", null, (s, e) => ExitApplication()),
             });
-            var helpMenu = new ToolStripMenuItem("&Help");
+            var helpMenu = _helpMenu = new ToolStripMenuItem("&Help");
             helpMenu.DropDownItems.Add(new ToolStripMenuItem("Project page", null, (s, e) => OpenUrl(ProjectUrl)));
             helpMenu.DropDownItems.Add(new ToolStripMenuItem("Check for updates", null, (s, e) => OpenUrl(ProjectUrl + "/releases")));
-            menu.Items.Add(settingsMenu);
-            menu.Items.Add(helpMenu);
 
             var status = new StatusStrip { SizingGrip = false };
             _statusText = new ToolStripStatusLabel { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
@@ -156,6 +177,10 @@ namespace AsusFanControlGUI
                 AutoSize = true,
             };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, ContentWidth));
+            _header = new HeaderBanner { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 4) };
+            _header.ButtonClicked += OnHeaderButton;
+            _header.DragStarted += StartWindowMove;
+            root.Controls.Add(_header);
             root.Controls.Add(BuildStatusGroup());
             root.Controls.Add(BuildControlRow());
             root.Controls.Add(_manualGroup = BuildManualGroup());
@@ -163,35 +188,17 @@ namespace AsusFanControlGUI
 
             Controls.Add(root);
             Controls.Add(status);
-            Controls.Add(menu);
-            MainMenuStrip = menu;
+            root.MouseDown += (s, e) => { if (e.Button == MouseButtons.Left) StartWindowMove(); };
         }
 
         Control BuildStatusGroup()
         {
-            var group = Group("Now");
-            var table = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 2, AutoSize = true };
-            // Two fan readings ("2730 · 2736") need the widest column.
-            foreach (float width in new[] { 20F, 20F, 35F, 25F })
-                table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, width));
-            string[] captions = { "CPU", "GPU", "Fans (RPM)", "Fan speed" };
-            var values = new Label[4];
-            for (int i = 0; i < 4; i++)
-            {
-                table.Controls.Add(new Label { Text = captions[i], AutoSize = true, ForeColor = SystemColors.GrayText }, i, 0);
-                values[i] = new Label
-                {
-                    Text = "--",
-                    AutoSize = true,
-                    Font = new Font("Segoe UI Semibold", 12F),
-                    Margin = new Padding(3, 0, 3, 3),
-                };
-                table.Controls.Add(values[i], i, 1);
-            }
-            _cpuValue = values[0];
-            _gpuValue = values[1];
-            _fanValue = values[2];
-            _targetValue = values[3];
+            var group = Group("Telemetry");
+            _hud = new StatusHud { Dock = DockStyle.Top, Margin = new Padding(3, 2, 3, 2) };
+            var table = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoSize = true };
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            _hud.Width = ContentWidth - 24;
+            table.Controls.Add(_hud);
             group.Controls.Add(table);
             return group;
         }
@@ -199,11 +206,11 @@ namespace AsusFanControlGUI
         Control BuildControlRow()
         {
             var row = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false, Margin = new Padding(0, 6, 0, 2) };
-            _controlCheck = new CheckBox
+            _controlCheck = new NeonCheckBox
             {
                 Text = "Control fans",
                 AutoSize = true,
-                Font = new Font(Font, FontStyle.Bold),
+                Font = Theme.Display(9.5F),
                 Margin = new Padding(3, 4, 24, 3),
             };
             _controlCheck.CheckedChanged += (s, e) =>
@@ -214,8 +221,8 @@ namespace AsusFanControlGUI
                 UpdateEnabledState();
                 ApplyToController();
             };
-            _autoRadio = new RadioButton { Text = "Auto (fan curve)", AutoSize = true, Margin = new Padding(3, 4, 12, 3) };
-            _manualRadio = new RadioButton { Text = "Manual", AutoSize = true, Margin = new Padding(3, 4, 3, 3) };
+            _autoRadio = new NeonRadioButton { Text = "Auto (fan curve)", AutoSize = true, Margin = new Padding(3, 4, 12, 3) };
+            _manualRadio = new NeonRadioButton { Text = "Manual", AutoSize = true, Margin = new Padding(3, 4, 3, 3) };
             _autoRadio.CheckedChanged += OnModeChanged;
             _manualRadio.CheckedChanged += OnModeChanged;
             row.Controls.AddRange(new Control[] { _controlCheck, _autoRadio, _manualRadio });
@@ -228,14 +235,12 @@ namespace AsusFanControlGUI
             var table = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoSize = true };
             table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
-            _manualTrack = new TrackBar
+            _manualTrack = new NeonSlider
             {
                 Minimum = 0,
                 Maximum = 100,
-                TickFrequency = 10,
-                SmallChange = 1,
-                LargeChange = 10,
                 Dock = DockStyle.Fill,
+                Margin = new Padding(3, 6, 3, 3),
             };
             _manualTrack.ValueChanged += (s, e) =>
             {
@@ -245,7 +250,7 @@ namespace AsusFanControlGUI
                 _settings.Save();
                 ApplyToController();
             };
-            _manualValue = new Label { AutoSize = true, Font = new Font("Segoe UI Semibold", 11F), Anchor = AnchorStyles.Left, Margin = new Padding(6, 8, 3, 3) };
+            _manualValue = new Label { AutoSize = true, Font = Theme.Display(15F), Tag = "signal", Anchor = AnchorStyles.Left, Margin = new Padding(6, 4, 3, 3) };
             table.Controls.Add(_manualTrack, 0, 0);
             table.Controls.Add(_manualValue, 1, 0);
             table.Controls.Add(Hint("0% stops the fans. Untick “Control fans” to hand them back to the BIOS."), 0, 1);
@@ -261,10 +266,10 @@ namespace AsusFanControlGUI
 
             // Profile row
             var profileRow = Flow();
-            _profileCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 170, Margin = new Padding(3, 4, 6, 3) };
+            _profileCombo = new NeonComboBox { Width = 150, Margin = new Padding(3, 5, 6, 3) };
             _profileCombo.SelectedIndexChanged += OnProfileSelected;
-            _newProfileButton = SmallButton("New…", (s, e) => NewProfile());
-            _renameProfileButton = SmallButton("Rename…", (s, e) => RenameProfile());
+            _newProfileButton = SmallButton("New", (s, e) => NewProfile());
+            _renameProfileButton = SmallButton("Rename", (s, e) => RenameProfile());
             _deleteProfileButton = SmallButton("Delete", (s, e) => DeleteProfile());
             profileRow.Controls.AddRange(new Control[]
             {
@@ -274,68 +279,53 @@ namespace AsusFanControlGUI
 
             // Options row
             var optionsRow = Flow();
-            _stepsCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 48, Margin = new Padding(3, 4, 18, 3) };
-            _stepsCombo.Items.AddRange(new object[] { "2", "3" });
-            _stepsCombo.SelectedIndexChanged += OnStepsChanged;
-            _useGpuCheck = new CheckBox { Text = "Also follow GPU temperature", AutoSize = true, Margin = new Padding(3, 6, 3, 3) };
+            _useGpuCheck = new NeonCheckBox { Text = "Also follow GPU temperature", AutoSize = true, Margin = new Padding(3, 6, 3, 3) };
             _useGpuCheck.CheckedChanged += OnUseGpuChanged;
-            optionsRow.Controls.AddRange(new Control[] { RowLabel("Steps"), _stepsCombo, _useGpuCheck });
+            optionsRow.Controls.AddRange(new Control[] { RowLabel(""), _useGpuCheck });
             table.Controls.Add(optionsRow);
 
-            // Which curve is being edited
+            // Which curve is shown and edited
             var editRow = Flow();
-            _editCpuRadio = new RadioButton { Text = "CPU curve", AutoSize = true, Checked = true, Margin = new Padding(3, 4, 12, 3) };
-            _editGpuRadio = new RadioButton { Text = "GPU curve", AutoSize = true, Margin = new Padding(3, 4, 3, 3) };
+            _editCpuRadio = new NeonRadioButton { Text = "CPU curve", AutoSize = true, Checked = true, Margin = new Padding(3, 4, 12, 3) };
+            _editGpuRadio = new NeonRadioButton { Text = "GPU curve", AutoSize = true, Margin = new Padding(3, 4, 3, 3) };
             _editCpuRadio.CheckedChanged += OnEditTargetChanged;
             _editGpuRadio.CheckedChanged += OnEditTargetChanged;
-            editRow.Controls.AddRange(new Control[] { RowLabel("Edit"), _editCpuRadio, _editGpuRadio });
+            editRow.Controls.AddRange(new Control[] { RowLabel("Show"), _editCpuRadio, _editGpuRadio });
             table.Controls.Add(editRow);
 
-            // Steps grid + preview side by side
-            var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoSize = true };
-            body.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            var grid = new TableLayoutPanel { ColumnCount = 3, AutoSize = true, Margin = new Padding(0, 4, 8, 0) };
-            grid.Controls.Add(new Label { Text = "", AutoSize = true }, 0, 0);
-            grid.Controls.Add(new Label { Text = "From °C", AutoSize = true, ForeColor = SystemColors.GrayText }, 1, 0);
-            grid.Controls.Add(new Label { Text = "Fan %", AutoSize = true, ForeColor = SystemColors.GrayText }, 2, 0);
-            for (int i = 0; i < FanCurve.MaxSetpoints; i++)
-            {
-                _stepLabels[i] = new Label { Text = "Step " + (i + 1), AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 6, 6, 3) };
-                _tempEdits[i] = Numeric(FanCurve.MinTemperatureC, FanCurve.MaxTemperatureC);
-                _fanEdits[i] = Numeric(FanCurve.MinFanPercent, FanCurve.MaxFanPercent);
-                grid.Controls.Add(_stepLabels[i], 0, i + 1);
-                grid.Controls.Add(_tempEdits[i], 1, i + 1);
-                grid.Controls.Add(_fanEdits[i], 2, i + 1);
-            }
-            _preview = new CurvePreview { Dock = DockStyle.Fill, MinimumSize = new Size(220, 140), Margin = new Padding(0, 4, 0, 0) };
+            // The graph is the editor
+            _preview = new CurvePreview { Dock = DockStyle.Fill, MinimumSize = new Size(ContentWidth - 24, 260), Editing = true, Margin = new Padding(3, 4, 3, 0) };
             _preview.PointsChanged += OnGraphDragged;
+            _preview.Notice += text => _graphHint.Text = text;
+            table.Controls.Add(_preview);
 
-            // Graph with its Edit / Save / Cancel buttons underneath
-            var graphPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoSize = true, Margin = new Padding(0) };
-            var graphButtons = Flow();
-            _editGraphButton = SmallButton("Edit graph", (s, e) => BeginGraphEdit());
-            _saveGraphButton = SmallButton("Save", (s, e) => EndGraphEdit(true));
-            _cancelGraphButton = SmallButton("Cancel", (s, e) => EndGraphEdit(false));
-            _saveGraphButton.Visible = false;
-            _cancelGraphButton.Visible = false;
+            // Save / Cancel on the left, Calibrate RPM on the right, the hint underneath.
+            var graphButtons = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 2, AutoSize = true, Margin = new Padding(0, 4, 0, 0) };
+            graphButtons.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            graphButtons.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            graphButtons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            graphButtons.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            _saveGraphButton = SmallButton("Save", (s, e) => SaveGraph());
+            _saveGraphButton.Kind = NeonButtonKind.Primary;
+            _cancelGraphButton = SmallButton("Cancel", (s, e) => DiscardGraph());
+            _calibrateButton = SmallButton("Calibrate RPM", (s, e) => OnCalibrateClicked());
             _graphHint = new Label
             {
-                Text = "Drag the points",
                 AutoSize = true,
-                ForeColor = SystemColors.GrayText,
-                Margin = new Padding(6, 8, 3, 3),
-                Visible = false,
+                MaximumSize = new Size(ContentWidth - 30, 0),
+                Tag = "hint",
+                Margin = new Padding(3, 4, 3, 2),
+                Text = GraphHintText,
             };
-            graphButtons.Controls.AddRange(new Control[] { _editGraphButton, _saveGraphButton, _cancelGraphButton, _graphHint });
-            graphPanel.Controls.Add(_preview, 0, 0);
-            graphPanel.Controls.Add(graphButtons, 0, 1);
+            graphButtons.Controls.Add(_saveGraphButton, 0, 0);
+            graphButtons.Controls.Add(_cancelGraphButton, 1, 0);
+            graphButtons.Controls.Add(_calibrateButton, 3, 0);
+            graphButtons.Controls.Add(_graphHint, 0, 1);
+            graphButtons.SetColumnSpan(_graphHint, 4);
+            table.Controls.Add(graphButtons);
 
-            body.Controls.Add(grid, 0, 0);
-            body.Controls.Add(graphPanel, 1, 0);
-            table.Controls.Add(body);
-
-            table.Controls.Add(Hint("Below the first step the fans are off. A new speed is applied once the temperature has stayed in a step for 5 seconds. Typed changes apply right away; graph changes apply when you click Save."));
+            _curveHint = Hint("");
+            table.Controls.Add(_curveHint);
             group.Controls.Add(table);
             return group;
         }
@@ -354,6 +344,7 @@ namespace AsusFanControlGUI
             });
             menu.Opening += (s, e) =>
             {
+                Theme.ApplyMenu(menu);
                 _trayControl.Checked = _settings.ControlEnabled;
                 _trayProfiles.DropDownItems.Clear();
                 foreach (var profile in _settings.Profiles)
@@ -417,12 +408,21 @@ namespace AsusFanControlGUI
             _loading = wasLoading;
         }
 
+        /// <summary>The curve shown on the graph: CPU, or GPU when that is selected.</summary>
         FanSetpoint[] EditedPoints
         {
             get
             {
                 var profile = _settings.ActiveProfile;
                 return _editGpuRadio.Checked ? profile.Gpu : profile.Cpu;
+            }
+            set
+            {
+                var profile = _settings.ActiveProfile;
+                if (_editGpuRadio.Checked)
+                    profile.Gpu = value;
+                else
+                    profile.Cpu = value;
             }
         }
 
@@ -432,233 +432,110 @@ namespace AsusFanControlGUI
             _updatingEditors = true;
             try
             {
-                _stepsCombo.SelectedIndex = profile.PointCount == FanCurve.MinSetpoints ? 0 : 1;
                 _useGpuCheck.Checked = profile.UseGpu;
-                _editGpuRadio.Enabled = profile.UseGpu;
+                _editGpuRadio.Enabled = profile.UseGpu && !_calibrating;
                 if (!profile.UseGpu)
                     _editCpuRadio.Checked = true;
-
-                var points = EditedPoints;
-                for (int i = 0; i < FanCurve.MaxSetpoints; i++)
-                {
-                    bool visible = i < profile.PointCount;
-                    _stepLabels[i].Visible = visible;
-                    _tempEdits[i].Visible = visible;
-                    _fanEdits[i].Visible = visible;
-                    _tempEdits[i].Value = points[i].TemperatureC;
-                    _fanEdits[i].Value = points[i].FanPercent;
-                }
             }
             finally
             {
                 _updatingEditors = false;
             }
+            _graphDirty = false;
+            UpdateCurveHint();
             UpdatePreview();
+            UpdateGraphEditControls();
         }
 
-        /// <summary>Reads the editors into the curve being edited.</summary>
-        void CommitEditors()
+        void UpdateCurveHint()
         {
-            var profile = _settings.ActiveProfile;
-            var points = EditedPoints;
-            bool wasUpdating = _updatingEditors;
-            _updatingEditors = true;
-            try
-            {
-                for (int i = 0; i < profile.PointCount; i++)
-                {
-                    points[i].TemperatureC = (int)_tempEdits[i].Value;
-                    points[i].FanPercent = (int)_fanEdits[i].Value;
-                }
-            }
-            finally
-            {
-                _updatingEditors = wasUpdating;
-            }
-            FanCurve.Normalize(points, profile.PointCount);
-        }
-
-        /// <summary>
-        /// Commits numbers the user typed but has not confirmed with Enter or Tab: reading
-        /// NumericUpDown.Value validates the pending text and raises ValueChanged, which
-        /// saves through <see cref="OnCurveEdited"/>. Without this, a typed value was lost
-        /// when the window was closed straight away.
-        /// </summary>
-        void FlushTypedValues()
-        {
-            // While the graph is being edited the boxes mirror unsaved drag changes.
-            if (_loading || _graphEditing)
-                return;
-            foreach (var numeric in _tempEdits.Concat(_fanEdits))
-            {
-                var unused = numeric.Value;
-            }
-        }
-
-        void OnCurveEdited(object sender, EventArgs e)
-        {
-            if (_loading || _updatingEditors || _graphEditing)
-                return;
-            CommitEditors();
-            PushProfileToEditors();
-            _settings.Save();
-            ApplyToController();
+            string shape = "The speed follows the lines between the points; below the first point the first point's speed is used (0% stops the fans).";
+            string rpm = _settings.RpmCalibration != null
+                ? " RPM from calibration on " + _settings.RpmCalibration.MeasuredAt + "."
+                : " Calibrate RPM to show fan RPM instead of %.";
+            _curveHint.Text = shape + " A new curve speed is applied once it has held for 5 seconds." + rpm;
         }
 
         // ---------------------------------------------------------------- graph editing
 
-        void BeginGraphEdit()
-        {
-            if (_graphEditing)
-                return;
-            FlushTypedValues();
-            _graphEditing = true;
-            _graphDirty = false;
-            UpdatePreview();
-            _preview.Editing = true;
-            UpdateGraphEditControls();
-            Log.Write("Graph edit started (" + _settings.ActiveProfile.Name + ", " + (_editGpuRadio.Checked ? "GPU" : "CPU") + ")");
-        }
+        const string GraphHintText = "Drag a point to move it. Double-click to add a point, double-click a point to remove it.";
 
-        /// <summary>Mirrors the dragged points into the number boxes without saving.</summary>
         void OnGraphDragged(object sender, EventArgs e)
         {
-            if (!_graphEditing)
-                return;
             _graphDirty = true;
-            var points = _preview.Points;
-            _updatingEditors = true;
-            try
-            {
-                for (int i = 0; i < _settings.ActiveProfile.PointCount; i++)
-                {
-                    _tempEdits[i].Value = points[i].TemperatureC;
-                    _fanEdits[i].Value = points[i].FanPercent;
-                }
-            }
-            finally
-            {
-                _updatingEditors = false;
-            }
+            _graphHint.Text = GraphHintText;
+            UpdateGraphEditControls();
         }
 
-        /// <summary>Leaves graph editing; <paramref name="save"/> applies the dragged curve.</summary>
-        void EndGraphEdit(bool save)
+        /// <summary>Applies the curve shown on the graph.</summary>
+        void SaveGraph()
         {
-            if (!_graphEditing)
+            if (!_graphDirty)
                 return;
-
-            var profile = _settings.ActiveProfile;
-            if (save)
-            {
-                var dragged = _preview.Points;
-                var points = EditedPoints;
-                for (int i = 0; i < profile.PointCount; i++)
-                    points[i] = dragged[i];
-                FanCurve.Normalize(points, profile.PointCount);
-            }
-
-            _graphEditing = false;
-            _graphDirty = false;
-            _preview.Editing = false;
-            UpdateGraphEditControls();
+            EditedPoints = FanCurve.Normalize(_preview.Points, EditedPoints);
             PushProfileToEditors();
+            _settings.Save();
+            ApplyToController();
+            Log.Write("Curve saved (" + _settings.ActiveProfile.Name + ", " + (_editGpuRadio.Checked ? "GPU" : "CPU") + "): "
+                + string.Join(", ", EditedPoints.Select(p => p.TemperatureC + "°C→" + p.FanPercent + "%")));
+        }
 
-            if (save)
-            {
-                _settings.Save();
-                ApplyToController();
-                var saved = EditedPoints;
-                Log.Write("Graph edit saved: " + string.Join(", ",
-                    saved.Take(profile.PointCount).Select(p => p.TemperatureC + "°C→" + p.FanPercent + "%")));
-            }
-            else
-            {
-                Log.Write("Graph edit cancelled");
-            }
+        /// <summary>Puts the saved curve back on the graph.</summary>
+        void DiscardGraph()
+        {
+            if (!_graphDirty)
+                return;
+            PushProfileToEditors();
+            Log.Write("Curve changes discarded");
         }
 
         /// <summary>
-        /// Before something replaces the curve on screen (profile switch, mode change,
-        /// closing), finish an open graph edit, asking whether to keep unsaved changes.
+        /// Before something replaces the curve on screen (profile, curve or mode switch,
+        /// calibration, closing), deal with unsaved graph changes, asking when possible.
         /// </summary>
         void ResolveGraphEdit(bool canAsk)
         {
-            if (!_graphEditing)
+            if (!_graphDirty)
                 return;
-            bool save = false;
-            if (_graphDirty && canAsk)
-            {
-                save = MessageBox.Show(this, "Save the changes you made on the graph?", Text,
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
-            }
-            EndGraphEdit(save);
+            if (canAsk && MessageBox.Show(this, "Save the changes you made on the graph?", Text,
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                SaveGraph();
+            else
+                DiscardGraph();
         }
 
         void UpdateGraphEditControls()
         {
-            bool editing = _graphEditing;
-            _editGraphButton.Visible = !editing;
-            _saveGraphButton.Visible = editing;
-            _cancelGraphButton.Visible = editing;
-            _graphHint.Visible = editing;
+            _saveGraphButton.Enabled = _graphDirty && !_calibrating;
+            _cancelGraphButton.Enabled = _graphDirty && !_calibrating;
+            _calibrateButton.Enabled = true;
+            _preview.Editing = !_calibrating;
 
-            // Other curve settings would replace what is being dragged; lock them meanwhile.
-            _profileCombo.Enabled = !editing;
-            _newProfileButton.Enabled = !editing;
-            _renameProfileButton.Enabled = !editing;
-            _deleteProfileButton.Enabled = !editing && _settings.Profiles.Count > 1;
-            _stepsCombo.Enabled = !editing;
-            _useGpuCheck.Enabled = !editing;
-            _editCpuRadio.Enabled = !editing;
-            _editGpuRadio.Enabled = !editing && _settings.ActiveProfile.UseGpu;
-            for (int i = 0; i < FanCurve.MaxSetpoints; i++)
+            _profileCombo.Enabled = !_calibrating;
+            _newProfileButton.Enabled = !_calibrating;
+            _renameProfileButton.Enabled = !_calibrating;
+            _deleteProfileButton.Enabled = !_calibrating && _settings.Profiles.Count > 1;
+            _useGpuCheck.Enabled = !_calibrating;
+            _editCpuRadio.Enabled = !_calibrating;
+            _editGpuRadio.Enabled = !_calibrating && _settings.ActiveProfile.UseGpu;
+
+            if (_graphDirty)
             {
-                _tempEdits[i].Enabled = !editing;
-                _fanEdits[i].Enabled = !editing;
-            }
-
-            if (editing)
                 AcceptButton = _saveGraphButton;
-            else if (AcceptButton == _saveGraphButton)
-                AcceptButton = null;
-            CancelButton = editing ? _cancelGraphButton : null;
-        }
-
-        void OnStepsChanged(object sender, EventArgs e)
-        {
-            if (_loading || _updatingEditors)
-                return;
-            var profile = _settings.ActiveProfile;
-            int newCount = _stepsCombo.SelectedIndex == 0 ? FanCurve.MinSetpoints : FanCurve.MaxSetpoints;
-            if (newCount == profile.PointCount)
-                return;
-
-            CommitEditors();
-            foreach (var points in new[] { profile.Cpu, profile.Gpu })
-            {
-                if (newCount == FanCurve.MinSetpoints)
-                {
-                    points[1] = points[2];
-                }
-                else
-                {
-                    points[2] = points[1];
-                    points[1] = FanCurve.Midpoint(points[0], points[2]);
-                }
-                FanCurve.Normalize(points, newCount);
+                CancelButton = _cancelGraphButton;
             }
-            profile.PointCount = newCount;
-            PushProfileToEditors();
-            _settings.Save();
-            ApplyToController();
+            else
+            {
+                if (AcceptButton == _saveGraphButton) AcceptButton = null;
+                if (CancelButton == _cancelGraphButton) CancelButton = null;
+            }
         }
 
         void OnUseGpuChanged(object sender, EventArgs e)
         {
             if (_loading || _updatingEditors)
                 return;
-            CommitEditors();
+            ResolveGraphEdit(true);
             _settings.ActiveProfile.UseGpu = _useGpuCheck.Checked;
             PushProfileToEditors();
             _settings.Save();
@@ -670,18 +547,99 @@ namespace AsusFanControlGUI
             var radio = sender as RadioButton;
             if (_loading || _updatingEditors || radio == null || !radio.Checked)
                 return;
-            // The editors still show the other curve; save it before switching.
-            _updatingEditors = true;
-            var other = radio == _editGpuRadio ? _settings.ActiveProfile.Cpu : _settings.ActiveProfile.Gpu;
-            for (int i = 0; i < _settings.ActiveProfile.PointCount; i++)
+            if (_graphDirty)
             {
-                other[i].TemperatureC = (int)_tempEdits[i].Value;
-                other[i].FanPercent = (int)_fanEdits[i].Value;
+                // The radio has already switched; the graph still shows the other curve.
+                bool save = MessageBox.Show(this, "Save the changes you made on the graph?", Text,
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
+                if (save)
+                {
+                    var profile = _settings.ActiveProfile;
+                    if (radio == _editGpuRadio)
+                        profile.Cpu = FanCurve.Normalize(_preview.Points, profile.Cpu);
+                    else
+                        profile.Gpu = FanCurve.Normalize(_preview.Points, profile.Gpu);
+                    _settings.Save();
+                    ApplyToController();
+                    Log.Write("Curve saved (" + profile.Name + ", " + (radio == _editGpuRadio ? "CPU" : "GPU") + ")");
+                }
             }
-            FanCurve.Normalize(other, _settings.ActiveProfile.PointCount);
-            _updatingEditors = false;
             PushProfileToEditors();
-            _settings.Save();
+        }
+
+        // ---------------------------------------------------------------- RPM calibration
+
+        void OnCalibrateClicked()
+        {
+            if (_calibrating)
+            {
+                CancelCalibration();
+                return;
+            }
+            ResolveGraphEdit(true);
+            if (MessageBox.Show(this,
+                    "Calibration runs the fans at 10%, 20% … 100% and measures their RPM, so the graph can show RPM.\r\n\r\n" +
+                    "It takes one to two minutes and the fans get loud near the end. Normal fan control resumes afterwards.",
+                    "Calibrate RPM", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK)
+                return;
+
+            _calibrating = true;
+            _calibrationCancel = new System.Threading.CancellationTokenSource();
+            var cancel = _calibrationCancel.Token;
+            _calibrateButton.Text = "Stop calibration";
+            UpdateGraphEditControls();
+            SetStatusOverride("Calibrating: starting…");
+
+            var worker = new System.Threading.Thread(() =>
+            {
+                RpmCalibration result = _controller.Calibrate(
+                    (percent, rpm) => RunOnUi(() => SetStatusOverride("Calibrating: " + percent + "% → " + rpm + " RPM")),
+                    cancel);
+                RunOnUi(() => OnCalibrationFinished(result));
+            }) { IsBackground = true, Name = "Calibration" };
+            worker.Start();
+        }
+
+        void OnCalibrationFinished(RpmCalibration result)
+        {
+            _calibrating = false;
+            if (_calibrationCancel != null)
+            {
+                _calibrationCancel.Dispose();
+                _calibrationCancel = null;
+            }
+            _calibrateButton.Text = "Calibrate RPM";
+            SetStatusOverride(null);
+            UpdateGraphEditControls();
+
+            if (result != null)
+            {
+                _settings.RpmCalibration = result;
+                _settings.Save();
+                _preview.SetCalibration(result);
+                UpdateCurveHint();
+                if (Visible)
+                    MessageBox.Show(this, "Calibration finished. The fans reached up to " + result.MaxRpm + " RPM.",
+                        "Calibrate RPM", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            else if (Visible && !_exiting)
+            {
+                MessageBox.Show(this, "Calibration was stopped or the fans did not report a speed, so nothing was changed.",
+                    "Calibrate RPM", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        void CancelCalibration()
+        {
+            try
+            {
+                var cancel = _calibrationCancel;
+                if (cancel != null)
+                    cancel.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
         }
 
         void OnModeChanged(object sender, EventArgs e)
@@ -700,12 +658,13 @@ namespace AsusFanControlGUI
         {
             if (_loading || _profileCombo.SelectedItem == null)
                 return;
-            FlushTypedValues();
             SelectProfile((string)_profileCombo.SelectedItem);
         }
 
         void SelectProfile(string name)
         {
+            if (_header != null)
+                _header.Glitch();
             ResolveGraphEdit(Visible);
             _settings.ActiveProfileName = name;
             if (!_settings.IsAuto)
@@ -721,7 +680,6 @@ namespace AsusFanControlGUI
 
         void NewProfile()
         {
-            FlushTypedValues();
             string name = InputDialog.Prompt(this, "New profile", "Name for a copy of “" + _settings.ActiveProfile.Name + "”:",
                 _settings.UniqueProfileName(_settings.ActiveProfile.Name + " copy"));
             if (name == null)
@@ -795,7 +753,6 @@ namespace AsusFanControlGUI
                 Auto = _settings.IsAuto,
                 ManualPercent = _settings.ManualPercent,
                 Limit = _settings.LimitFanSpeed,
-                PointCount = profile.PointCount,
                 UseGpu = profile.UseGpu,
                 Cpu = (FanSetpoint[])profile.Cpu.Clone(),
                 Gpu = (FanSetpoint[])profile.Gpu.Clone(),
@@ -835,8 +792,8 @@ namespace AsusFanControlGUI
 
         void UpdatePreview()
         {
-            var profile = _settings.ActiveProfile;
-            _preview.SetCurve(EditedPoints, profile.PointCount);
+            _preview.SetCalibration(_settings.RpmCalibration);
+            _preview.SetCurve(EditedPoints);
             if (_lastStatus != null)
                 _preview.SetMarker(_editGpuRadio.Checked ? _lastStatus.GpuC : _lastStatus.CpuC);
         }
@@ -859,20 +816,32 @@ namespace AsusFanControlGUI
             if (IsDisposed)
                 return;
             _lastStatus = status;
-            _cpuValue.Text = FormatTemp(status.CpuC);
-            _gpuValue.Text = FormatTemp(status.GpuC);
-            _fanValue.Text = status.Rpms.Count == 0 ? "--" : string.Join(" · ", status.Rpms);
-            _targetValue.Text = FormatTarget(status.Applied);
+            int maxRpm = _settings.RpmCalibration != null ? _settings.RpmCalibration.MaxRpm : 6000;
+            _hud.SetValues(status.CpuC, status.GpuC, status.Rpms, maxRpm, FormatTarget(status.Applied), status.Applied);
+            _header.SetRpm(status.Rpms.Count == 0 ? 0 : (int)status.Rpms.Average());
+            UpdateHeaderInfo();
             _preview.SetMarker(_editGpuRadio.Checked ? status.GpuC : status.CpuC);
             UpdateStatusText();
 
-            string tip = "Asus Fan Control\nCPU " + FormatTemp(status.CpuC) + " · Fans " + _targetValue.Text;
+            string tip = "Asus Fan Control\nCPU " + FormatTemp(status.CpuC) + " · Fans " + FormatTarget(status.Applied);
             _tray.Text = tip.Length > 63 ? tip.Substring(0, 63) : tip;
+        }
+
+        /// <summary>Shows <paramref name="text"/> in the status bar instead of the usual state (null to stop).</summary>
+        void SetStatusOverride(string text)
+        {
+            _statusOverride = text;
+            UpdateStatusText();
         }
 
         void UpdateStatusText()
         {
             string text;
+            if (_statusOverride != null)
+            {
+                _statusText.Text = _statusOverride;
+                return;
+            }
             if (!_settings.ControlEnabled)
                 text = "Fan control is off: the BIOS controls the fans.";
             else if (_lastStatus != null && _lastStatus.Sleeping)
@@ -889,15 +858,121 @@ namespace AsusFanControlGUI
             _statusText.Text = text;
         }
 
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            Theme.PaintBackdrop(e.Graphics, ClientRectangle);
+        }
+
+        void OnThemeChanged()
+        {
+            Theme.Apply(this);
+            ApplyMenus();
+            foreach (ToolStripMenuItem item in _themeMenu.DropDownItems)
+                item.Checked = item.Text == Theme.Current.Name;
+            _header.Glitch();
+            Log.Write("Theme: " + Theme.Current.Name);
+        }
+
+        void UpdateHeaderInfo()
+        {
+            string mode = !_settings.ControlEnabled ? "BIOS CONTROL"
+                : _settings.IsAuto ? "AUTO // " + _settings.ActiveProfile.Name
+                : "MANUAL // " + _settings.ManualPercent + "%";
+            string temps = _lastStatus != null && _lastStatus.CpuC >= 0 ? "  ·  CPU " + _lastStatus.CpuC + "°C" : "";
+            _header.SetInfo("MODE " + mode + temps + "  ·  " + Theme.Current.Name);
+        }
+
         void FitToContent()
         {
             var root = Controls.OfType<TableLayoutPanel>().FirstOrDefault();
-            var menu = MainMenuStrip;
             var status = Controls.OfType<StatusStrip>().FirstOrDefault();
-            if (root == null || menu == null || status == null)
+            if (root == null || status == null)
                 return;
             Size preferred = root.GetPreferredSize(new Size(ContentWidth + root.Padding.Horizontal, 0));
-            ClientSize = new Size(preferred.Width, menu.Height + preferred.Height + status.Height);
+            ClientSize = new Size(preferred.Width + Padding.Horizontal, preferred.Height + status.Height + Padding.Vertical);
+        }
+
+        void ApplyMenus()
+        {
+            if (_tray != null)
+                Theme.ApplyMenu(_tray.ContextMenuStrip);
+            Theme.ApplyMenu(_settingsMenu.DropDown);
+            Theme.ApplyMenu(_helpMenu.DropDown);
+            Theme.ApplyMenu(_themeMenu.DropDown);
+        }
+
+        // ---------------------------------------------------------------- borderless window
+
+        const int WS_MINIMIZEBOX = 0x00020000;
+        const int WS_SYSMENU = 0x00080000;
+        const int CS_DROPSHADOW = 0x00020000;
+        const int WM_NCLBUTTONDOWN = 0x00A1;
+        const int HTCAPTION = 2;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        static extern bool ReleaseCapture();
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                var cp = base.CreateParams;
+                // Minimize box: the taskbar button minimizes and restores the window.
+                // System menu: Alt+Space and the taskbar's Move/Close still work.
+                cp.Style |= WS_MINIMIZEBOX | WS_SYSMENU;
+                cp.ClassStyle |= CS_DROPSHADOW;
+                return cp;
+            }
+        }
+
+        /// <summary>Hands the drag to Windows, so moving and Snap behave like a normal title bar.</summary>
+        void StartWindowMove()
+        {
+            ReleaseCapture();
+            SendMessage(Handle, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
+        }
+
+        void OnHeaderButton(HeaderBanner.CaptionButton button, Point screen)
+        {
+            switch (button)
+            {
+                case HeaderBanner.CaptionButton.Settings:
+                    _settingsMenu.DropDown.Show(screen);
+                    break;
+                case HeaderBanner.CaptionButton.Help:
+                    _helpMenu.DropDown.Show(screen);
+                    break;
+                case HeaderBanner.CaptionButton.Minimize:
+                    WindowState = FormWindowState.Minimized;
+                    break;
+                case HeaderBanner.CaptionButton.Close:
+                    Close();
+                    break;
+            }
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (e.Button == MouseButtons.Left)
+                StartWindowMove();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            // A thin outline, since there is no window frame.
+            using (var pen = new Pen(Theme.Current.LineHi))
+                e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            Invalidate();
         }
 
         static string FormatTemp(int value)
@@ -933,19 +1008,12 @@ namespace AsusFanControlGUI
             FitToContent();
         }
 
-        protected override void OnDeactivate(EventArgs e)
-        {
-            base.OnDeactivate(e);
-            FlushTypedValues();
-        }
-
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             ResolveGraphEdit(Visible && e.CloseReason == CloseReason.UserClosing && !_exitRequested);
             if (!_exiting && e.CloseReason == CloseReason.UserClosing && _settings.MinimizeToTray)
             {
                 e.Cancel = true;
-                FlushTypedValues();
                 Hide();
                 return;
             }
@@ -971,6 +1039,7 @@ namespace AsusFanControlGUI
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
+            Theme.SetDarkTitleBar(this, Theme.Current.IsDark);
             if (_listening)
                 return;
             _listening = true;
@@ -1001,7 +1070,7 @@ namespace AsusFanControlGUI
         {
             if (_tray == null)
                 return;
-            FlushTypedValues();
+            CancelCalibration();
             _settings.Save();
             _sleepWatcher.Dispose();
             InstanceSignals.Stop();
@@ -1047,7 +1116,7 @@ namespace AsusFanControlGUI
 
         static GroupBox Group(string text)
         {
-            return new GroupBox
+            return new NeonPanel
             {
                 Text = text,
                 Dock = DockStyle.Fill,
@@ -1065,7 +1134,17 @@ namespace AsusFanControlGUI
 
         static Label RowLabel(string text)
         {
-            return new Label { Text = text, AutoSize = false, Width = 52, Height = 23, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(3, 4, 3, 3) };
+            return new Label
+            {
+                Text = text.ToUpperInvariant(),
+                Tag = "caption",
+                Font = Theme.Hud(7.5F, FontStyle.Bold),
+                AutoSize = false,
+                Width = 56,
+                Height = 23,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Margin = new Padding(3, 4, 3, 3),
+            };
         }
 
         static Label Hint(string text)
@@ -1075,23 +1154,18 @@ namespace AsusFanControlGUI
                 Text = text,
                 AutoSize = true,
                 MaximumSize = new Size(ContentWidth - 24, 0),
-                ForeColor = SystemColors.GrayText,
+                Tag = "hint",
+                Font = Theme.Body(8F),
                 Margin = new Padding(3, 4, 3, 2),
             };
         }
 
-        static Button SmallButton(string text, EventHandler onClick)
+        static NeonButton SmallButton(string text, EventHandler onClick)
         {
-            var button = new Button { Text = text, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(2, 3, 2, 3) };
+            var button = new NeonButton { Text = text, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(2, 3, 2, 3) };
             button.Click += onClick;
             return button;
         }
 
-        NumericUpDown Numeric(int min, int max)
-        {
-            var numeric = new NumericUpDown { Minimum = min, Maximum = max, Width = 64, Margin = new Padding(3, 3, 6, 3) };
-            numeric.ValueChanged += OnCurveEdited;
-            return numeric;
-        }
     }
 }

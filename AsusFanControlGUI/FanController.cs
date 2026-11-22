@@ -1,6 +1,7 @@
 using AsusFanControl;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 
 namespace AsusFanControlGUI
@@ -28,7 +29,6 @@ namespace AsusFanControlGUI
         public bool Auto;
         public int ManualPercent;
         public bool Limit;
-        public int PointCount;
         public bool UseGpu;
         public FanSetpoint[] Cpu;
         public FanSetpoint[] Gpu;
@@ -42,12 +42,17 @@ namespace AsusFanControlGUI
     /// services), handing the fans back to the firmware. Writes are skipped while the
     /// target is unchanged, so the current duty is re-sent every <see cref="ReassertSeconds"/>
     /// to recover from that.
+    ///
+    /// EC writes are kept rare: a curve speed is written only after it has held for
+    /// <see cref="DebounceSeconds"/>, and changes smaller than <see cref="Deadband"/>% are
+    /// ignored, so the curve does not write on every 1% of drift.
     /// </summary>
     public sealed class FanController : IDisposable
     {
         const int TickMs = 3000;
         const int DebounceSeconds = 5;
         const int ReassertSeconds = 15;
+        const int Deadband = 3;
 
         readonly AsusControl _asus = new AsusControl();
         readonly object _sync = new object();
@@ -124,6 +129,93 @@ namespace AsusFanControlGUI
             }
         }
 
+        /// <summary>
+        /// Measures the fans' RPM at 10%, 20% … 100% so the graph can show RPM. Blocks
+        /// (run it on a background thread) for about one to two minutes; normal control
+        /// is paused meanwhile and resumes afterwards. Returns null when cancelled or when
+        /// the fans never reported a speed.
+        /// </summary>
+        public RpmCalibration Calibrate(Action<int, int> progress, CancellationToken cancel)
+        {
+            var points = new List<RpmPoint> { new RpmPoint(0, 0) };
+            lock (_tickLock)
+            {
+                if (_stopped)
+                    return null;
+                Log.Write("Calibration started");
+                try
+                {
+                    for (int percent = 10; percent <= 100; percent += 10)
+                    {
+                        if (cancel.IsCancellationRequested)
+                            break;
+                        _asus.SetFanDutyNow(percent);
+                        int rpm = WaitForSteadyRpm(cancel);
+                        if (rpm < 0)
+                            break;
+                        points.Add(new RpmPoint(percent, rpm));
+                        Log.Write("Calibration: " + percent + "% -> " + rpm + " RPM");
+                        if (progress != null)
+                            progress(percent, rpm);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("Calibration failed: " + ex.Message);
+                    points.Clear();
+                }
+                finally
+                {
+                    // Re-apply the normal target on the next tick.
+                    lock (_sync)
+                    {
+                        _applied = FanStatus.Unknown;
+                        _immediate = true;
+                    }
+                }
+            }
+            TickSoon();
+
+            if (cancel.IsCancellationRequested || points.Count < 11)
+            {
+                Log.Write("Calibration " + (cancel.IsCancellationRequested ? "cancelled" : "incomplete"));
+                return null;
+            }
+            var result = new RpmCalibration
+            {
+                MeasuredAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm"),
+                Points = points.ToArray(),
+            };
+            result.Normalize();
+            if (!result.IsUsable)
+            {
+                Log.Write("Calibration: the fans reported no speed");
+                return null;
+            }
+            Log.Write("Calibration finished, max " + result.MaxRpm + " RPM");
+            return result;
+        }
+
+        /// <summary>
+        /// Average RPM of all fans once it has settled: two readings a second apart
+        /// within 3% of each other, after at least 3 s, at most 12 s. -1 if cancelled.
+        /// </summary>
+        int WaitForSteadyRpm(CancellationToken cancel)
+        {
+            int previous = -1;
+            for (int second = 1; second <= 12; second++)
+            {
+                if (cancel.WaitHandle.WaitOne(1000))
+                    return -1;
+                List<int> rpms = _asus.GetFanSpeeds();
+                int average = rpms.Count == 0 ? 0 : (int)Math.Round(rpms.Average());
+                if (second >= 3 && previous >= 0 && Math.Abs(average - previous) <= Math.Max(50, previous * 0.03))
+                    return average;
+                previous = average;
+            }
+            return previous;
+        }
+
         /// <summary>Last-resort safety on a crash: never leave the fans stopped.</summary>
         public void EmergencyRelease()
         {
@@ -189,6 +281,11 @@ namespace AsusFanControlGUI
         {
             int target = ComputeTarget(config, cpu, gpu);
             DateTime now = DateTime.UtcNow;
+            bool smooth = config.Enabled && config.Auto;
+
+            // The curve drifts by 1% at a time; stay put until it has moved enough.
+            if (smooth && !immediate && Near(target, _applied))
+                target = _applied;
 
             if (target == _applied)
             {
@@ -207,14 +304,21 @@ namespace AsusFanControlGUI
                 return;
             }
 
-            if (_pending != target)
+            if (_pending == null || !(_pending == target || (smooth && Near(target, _pending.Value))))
             {
                 _pending = target;
                 _pendingSinceUtc = now;
                 return;
             }
+            _pending = target;
             if ((now - _pendingSinceUtc).TotalSeconds >= DebounceSeconds)
                 Write(target, "curve");
+        }
+
+        static bool Near(int a, int b)
+        {
+            // 0 means "stop", so going to or from it always counts as a change.
+            return a > 0 && b > 0 && Math.Abs(a - b) < Deadband;
         }
 
         static int ComputeTarget(FanTargetConfig config, int cpu, int gpu)
@@ -228,10 +332,10 @@ namespace AsusFanControlGUI
                     : config.ManualPercent;
 
             int cpuPercent = cpu >= 0 && config.Cpu != null
-                ? FanCurve.GetFanPercent(cpu, config.Cpu, config.PointCount, config.Limit)
+                ? FanCurve.GetFanPercent(cpu, config.Cpu, config.Limit)
                 : -1;
             int gpuPercent = config.UseGpu && gpu >= 0 && config.Gpu != null
-                ? FanCurve.GetFanPercent(gpu, config.Gpu, config.PointCount, config.Limit)
+                ? FanCurve.GetFanPercent(gpu, config.Gpu, config.Limit)
                 : -1;
             int percent = FanCurve.Combine(cpuPercent, gpuPercent);
 

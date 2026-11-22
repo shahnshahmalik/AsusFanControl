@@ -9,15 +9,21 @@ using System.Text;
 namespace AsusFanControlGUI
 {
     /// <summary>
-    /// A named fan curve. CPU and GPU each have up to three setpoints; only the first
-    /// <see cref="PointCount"/> are used.
+    /// A named fan curve. CPU and GPU each have their own list of 2 to
+    /// <see cref="FanCurve.MaxSetpoints"/> points.
     /// </summary>
     [DataContract]
     public sealed class FanProfile
     {
+        static readonly FanSetpoint[] DefaultPoints = { new FanSetpoint(35, 45), new FanSetpoint(55, 80), new FanSetpoint(75, 100) };
+
         [DataMember(Name = "name", Order = 0)]
         public string Name { get; set; }
 
+        /// <summary>
+        /// Versions before 1.5 always stored three points and used the first 2 or 3 of
+        /// them. 0 now: every stored point is used.
+        /// </summary>
         [DataMember(Name = "pointCount", Order = 1)]
         public int PointCount { get; set; }
 
@@ -30,15 +36,18 @@ namespace AsusFanControlGUI
         [DataMember(Name = "gpu", Order = 4)]
         public FanSetpoint[] Gpu { get; set; }
 
-        public static FanProfile Create(string name, int t1, int f1, int t2, int f2, int t3, int f3)
+        /// <param name="pairs">Temperature, percent, temperature, percent, …</param>
+        public static FanProfile Create(string name, params int[] pairs)
         {
+            var points = new FanSetpoint[pairs.Length / 2];
+            for (int i = 0; i < points.Length; i++)
+                points[i] = new FanSetpoint(pairs[i * 2], pairs[i * 2 + 1]);
             return new FanProfile
             {
                 Name = name,
-                PointCount = FanCurve.MaxSetpoints,
                 UseGpu = false,
-                Cpu = new[] { new FanSetpoint(t1, f1), new FanSetpoint(t2, f2), new FanSetpoint(t3, f3) },
-                Gpu = new[] { new FanSetpoint(t1, f1), new FanSetpoint(t2, f2), new FanSetpoint(t3, f3) },
+                Cpu = points,
+                Gpu = (FanSetpoint[])points.Clone(),
             };
         }
 
@@ -47,7 +56,6 @@ namespace AsusFanControlGUI
             return new FanProfile
             {
                 Name = newName,
-                PointCount = PointCount,
                 UseGpu = UseGpu,
                 Cpu = (FanSetpoint[])Cpu.Clone(),
                 Gpu = (FanSetpoint[])Gpu.Clone(),
@@ -56,19 +64,23 @@ namespace AsusFanControlGUI
 
         internal void Normalize()
         {
-            PointCount = FanCurve.ClampCount(PointCount);
-            Cpu = FixPoints(Cpu);
-            Gpu = FixPoints(Gpu);
-            FanCurve.Normalize(Cpu, PointCount);
-            FanCurve.Normalize(Gpu, PointCount);
+            Cpu = FanCurve.Normalize(TrimOld(Cpu), DefaultPoints);
+            Gpu = FanCurve.Normalize(TrimOld(Gpu), DefaultPoints);
+            PointCount = 0;
         }
 
-        static FanSetpoint[] FixPoints(FanSetpoint[] points)
+        /// <summary>Settings from before 1.5 held step curves; see <see cref="FanCurve.FromSteps"/>.</summary>
+        internal void ConvertFromSteps()
         {
-            var fixedPoints = new[] { new FanSetpoint(35, 45), new FanSetpoint(55, 80), new FanSetpoint(75, 100) };
-            if (points != null)
-                Array.Copy(points, fixedPoints, Math.Min(points.Length, fixedPoints.Length));
-            return fixedPoints;
+            Cpu = FanCurve.Normalize(FanCurve.FromSteps(Cpu), DefaultPoints);
+            Gpu = FanCurve.Normalize(FanCurve.FromSteps(Gpu), DefaultPoints);
+        }
+
+        FanSetpoint[] TrimOld(FanSetpoint[] points)
+        {
+            if (points != null && PointCount >= FanCurve.MinSetpoints && PointCount < points.Length)
+                return points.Take(PointCount).ToArray();
+            return points;
         }
     }
 
@@ -83,7 +95,8 @@ namespace AsusFanControlGUI
     {
         public const string ModeAuto = "auto";
         public const string ModeManual = "manual";
-        const int CurrentVersion = 1;
+        /// <summary>1: step curves (up to 1.4). 2: curves are lines between points.</summary>
+        const int CurrentVersion = 2;
 
         [DataMember(Name = "version", Order = 0)]
         public int Version { get; set; }
@@ -118,6 +131,14 @@ namespace AsusFanControlGUI
         [DataMember(Name = "limitFanSpeed", Order = 10)]
         public bool LimitFanSpeed { get; set; }
 
+        /// <summary>From Calibrate RPM; null until the fans have been measured.</summary>
+        [DataMember(Name = "rpmCalibration", Order = 11)]
+        public RpmCalibration RpmCalibration { get; set; }
+
+        /// <summary>Name of the window theme (see <see cref="Theme.Palettes"/>).</summary>
+        [DataMember(Name = "theme", Order = 12)]
+        public string Theme { get; set; }
+
         public bool IsAuto
         {
             get { return Mode != ModeManual; }
@@ -149,7 +170,11 @@ namespace AsusFanControlGUI
             {
                 if (File.Exists(FilePath))
                 {
-                    using (var stream = File.OpenRead(FilePath))
+                    // Editors (and PowerShell 5's Set-Content -Encoding utf8) add a UTF-8 byte
+                    // order mark, which the JSON reader rejects; skip it rather than reset.
+                    byte[] bytes = File.ReadAllBytes(FilePath);
+                    int skip = bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF ? 3 : 0;
+                    using (var stream = new MemoryStream(bytes, skip, bytes.Length - skip))
                         settings = (AppSettings)Serializer().ReadObject(stream);
                 }
             }
@@ -212,13 +237,25 @@ namespace AsusFanControlGUI
         void Normalize()
         {
             if (Mode != ModeManual) Mode = ModeAuto;
+            if (!AsusFanControlGUI.Theme.Palettes.Any(p => p.Name == Theme))
+                Theme = AsusFanControlGUI.Theme.DefaultName;
             ManualPercent = FanCurve.ClampPercent(ManualPercent);
             if (Profiles == null) Profiles = new List<FanProfile>();
             Profiles.RemoveAll(p => p == null || string.IsNullOrWhiteSpace(p.Name));
             if (Profiles.Count == 0)
                 Profiles.AddRange(DefaultProfiles());
             foreach (var profile in Profiles)
+            {
                 profile.Normalize();
+                if (Version < 2)
+                    profile.ConvertFromSteps();
+            }
+            if (RpmCalibration != null)
+            {
+                RpmCalibration.Normalize();
+                if (!RpmCalibration.IsUsable)
+                    RpmCalibration = null;
+            }
             if (!Profiles.Any(p => p.Name == ActiveProfileName))
                 ActiveProfileName = Profiles[0].Name;
             Version = CurrentVersion;
@@ -226,9 +263,9 @@ namespace AsusFanControlGUI
 
         static IEnumerable<FanProfile> DefaultProfiles()
         {
-            yield return FanProfile.Create("Balanced", 35, 45, 55, 80, 75, 100);
-            yield return FanProfile.Create("Quiet", 50, 25, 65, 45, 80, 80);
-            yield return FanProfile.Create("Performance", 30, 50, 50, 80, 70, 100);
+            yield return FanProfile.Create("Balanced", 40, 0, 50, 30, 60, 45, 70, 60, 80, 80, 90, 100);
+            yield return FanProfile.Create("Quiet", 50, 0, 60, 25, 70, 40, 80, 60, 90, 85, 95, 100);
+            yield return FanProfile.Create("Performance", 30, 25, 40, 40, 50, 55, 60, 70, 70, 85, 80, 100);
         }
 
         /// <summary>
@@ -264,7 +301,7 @@ namespace AsusFanControlGUI
                 settings.StartWithWindows = old.startWithWindows;
 
                 var balanced = settings.Profiles[0];
-                balanced.PointCount = old.fanCurvePointCount;
+                balanced.PointCount = old.fanCurvePointCount;   // trimmed in Normalize
                 balanced.UseGpu = old.useGpuCurve;
                 balanced.Cpu = new[]
                 {

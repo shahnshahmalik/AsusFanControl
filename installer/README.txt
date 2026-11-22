@@ -25,11 +25,14 @@ the option off and on again after moving it.
 Good to know
 ------------
 - 0% stops the fans. Untick "Control fans" to hand them back to the BIOS.
-- Profiles: Balanced, Quiet and Performance are included. "New..." copies the
+- Profiles: Balanced, Quiet and Performance are included. "New" copies the
   current profile so you can edit it.
-- Edit a curve on the graph: click "Edit graph", drag the points (left/right
-  for temperature, up/down for fan speed), then click Save. Cancel or Esc
-  discards the changes.
+- Edit a curve on the graph: drag a point (left/right for temperature,
+  up/down for fan speed), double-click to add a point, double-click a point
+  to remove it, then click Save. Cancel or Esc discards the changes.
+- Calibrate RPM (under the graph) measures your fans so the graph shows RPM.
+- Themes: the gear button at the top right > Theme.
+- Settings and Help are the gear and ? buttons at the top right of the window.
 - Sleep: Settings > Hand fans to the BIOS during sleep (on by default).
 - Settings and the log are in C:\ProgramData\AsusFanControl
   (Settings > Open settings and log folder). Your settings stay when you

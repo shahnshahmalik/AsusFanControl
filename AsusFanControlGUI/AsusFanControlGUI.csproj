@@ -81,8 +81,10 @@
     <Compile Include="MainForm.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="GamingArt.cs" />
     <Compile Include="InstanceSignals.cs" />
     <Compile Include="SleepWatcher.cs" />
+    <Compile Include="Theme.cs" />
     <Compile Include="WindowsStartup.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

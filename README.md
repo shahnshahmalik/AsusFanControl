@@ -57,17 +57,19 @@ Included `AsusWinIO64.dll` is licenced to `(c) ASUSTek COMPUTER INC.` which can 
 
 ### GUI features
 
-- **Manual and Auto mode.** Manual holds one fan speed. Auto follows a temperature curve. The top of the window always shows CPU and GPU temperature, fan RPM and the speed being applied.
+- **Manual and Auto mode.** Manual holds one fan speed. Auto follows a temperature curve. The top of the window always shows CPU and GPU temperature, fan RPM and the speed being applied, as segmented bars that change colour as temperatures rise.
 
-- **Fan curve profiles.** A profile has 2 or 3 steps; each step is a temperature and a fan speed that applies from that temperature up to the next step. Below the first step the fans are off. *Balanced*, *Quiet* and *Performance* are included; **New…** copies the current profile, and profiles can be renamed or deleted. The tray menu switches profiles too. A graph shows the curve with the current temperature.
+- **Fan curve profiles.** A curve has 2 to 8 points joined by straight lines; below the first point the first point's speed is used and above the last point the last point's (start with a 0% point to have the fans stop when cool). *Balanced*, *Quiet* and *Performance* are included; **New** copies the current profile, and profiles can be renamed or deleted. The tray menu switches profiles too. Step curves from versions before 1.5 are converted on first start, with a 0% point added 5 °C below the first step.
 
-- **Edit the curve on the graph.** Click **Edit graph** under the graph, then drag a step's point: left/right sets its temperature, up/down its fan speed. A label shows the values while you drag, and steps cannot be dragged past each other. **Save** applies the new curve; **Cancel** (or Esc) discards it. Typing values in the boxes still works and applies right away.
+- **Edit the curve on the graph.** The graph is the editor: drag a point to move it (left/right sets its temperature, up/down its fan speed), double-click empty space to add a point, double-click a point to remove it. Hovering a point shows its values. **Save** (Enter) applies the curve; **Cancel** (Esc) puts the saved one back. Switching profile, curve or mode with unsaved changes asks whether to save.
+
+- **RPM on the graph.** **Calibrate RPM** runs the fans at 10%, 20% … 100% (one to two minutes, loud near the end) and stores the measured RPM. The graph then shows RPM instead of %; the fans are still driven by percent.
 
 - **GPU curve.** Tick **Also follow GPU temperature** to give the profile a second curve; the fans run at whichever curve asks for more. GPU temperature comes from `AsusWinIO64.dll` (`Thermal_Read_GpuTS1L_Temperature`, or `TS1R` when the left sensor has no reading). All fans get the same speed.
 
 - **What 0% means.** In the GUI, 0% stops the fans (test mode on, duty 0). Unticking **Control fans** hands the fans back to the BIOS (test mode off). If no temperature can be read, Auto mode hands the fans to the BIOS as well. The command line keeps its old meaning: `--set-fan-speeds=0` turns test mode off.
 
-- **Steadier control.** A new curve speed is applied once the temperature has stayed in a step for 5 seconds; your own changes apply at once. The EC can drop out of test mode on its own (for example around Modern Standby), so the app re-sends the current speed every 15 seconds.
+- **Steadier control.** A new curve speed is applied once it has held for 5 seconds, and changes smaller than 3% are ignored, so the EC is not written on every degree; your own changes apply at once. The EC can drop out of test mode on its own (for example around Modern Standby), so the app re-sends the current speed every 15 seconds.
 
 - **Sleep.** Sleep is detected for classic sleep and for Modern Standby, which often does not send the usual suspend notification. **Settings → Hand fans to the BIOS during sleep** (on by default) releases the fans while asleep; with it off, the current speed is kept. On wake the speed is applied again.
 
@@ -76,3 +78,7 @@ Included `AsusWinIO64.dll` is licenced to `(c) ASUSTek COMPUTER INC.` which can 
 - **Settings.** Settings and profiles are saved in `%ProgramData%\AsusFanControl\settings.json`, shared by every account, so they survive restarts, running as SYSTEM and unzipping a new release elsewhere. Settings from earlier versions are imported on first run. `log.txt` in the same folder records starts, sleep/wake and fan changes; **Settings → Open settings and log folder** opens it.
 
 - **Other settings.** Keep running in the notification area when closed, hand fans to the BIOS on exit, and limit non-zero speeds to 40–99%.
+
+- **Themes.** **Settings → Theme** switches between *Neon Grid* (default), *Crimson Strike*, *Matrix*, *Ember* and the light *Daylight*; the choice is saved. Everything is drawn in code: cut-corner panels, a turbine in the header that spins with the fan RPM, and HUD-style readouts. Chakra Petch / JetBrains Mono are used when installed, otherwise Bahnschrift / Cascadia Mono.
+
+- **Borderless window.** The header is the title bar: drag it (or any empty space) to move the window, with Windows Snap; the buttons at its top right open Settings and Help, minimize and close. The taskbar button and Alt+Space work as usual.
