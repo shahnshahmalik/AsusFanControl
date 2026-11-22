@@ -151,6 +151,7 @@ namespace AsusFanControlGUI
             Invalidate();
             if (pressed != CaptionButton.None && ButtonAt(e.Location) == pressed)
             {
+                Capture = false;
                 var r = ButtonRect(pressed);
                 var handler = ButtonClicked;
                 if (handler != null)

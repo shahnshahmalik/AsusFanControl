@@ -34,7 +34,11 @@ namespace AsusFanControlGUI
         // Status
         HeaderBanner _header;
         StatusHud _hud;
-        ToolStripMenuItem _themeMenu, _settingsMenu, _helpMenu;
+        ToolStripMenuItem _themeMenu;
+        // Settings and Help open from the header buttons. They are context menus owned by
+        // the header, not drop-downs of items on a menu bar: a drop-down whose item is on
+        // no strip has no owner window and can close as soon as it opens.
+        ContextMenuStrip _settingsMenu, _helpMenu;
         ToolStripStatusLabel _statusText;
 
         // Control
@@ -117,7 +121,7 @@ namespace AsusFanControlGUI
 
         void BuildLayout()
         {
-            var settingsMenu = _settingsMenu = new ToolStripMenuItem("&Settings");
+            var settingsMenu = new ToolStripMenuItem("&Settings");
             _menuStartWithWindows = CheckItem("Start with Windows", OnStartWithWindowsClicked);
             _menuMinimizeToTray = CheckItem("Keep running in the notification area when closed", (s, e) =>
             {
@@ -161,9 +165,11 @@ namespace AsusFanControlGUI
                 new ToolStripSeparator(),
                 new ToolStripMenuItem("E&xit", null, (s, e) => ExitApplication()),
             });
-            var helpMenu = _helpMenu = new ToolStripMenuItem("&Help");
+            var helpMenu = new ToolStripMenuItem("&Help");
             helpMenu.DropDownItems.Add(new ToolStripMenuItem("Project page", null, (s, e) => OpenUrl(ProjectUrl)));
             helpMenu.DropDownItems.Add(new ToolStripMenuItem("Check for updates", null, (s, e) => OpenUrl(ProjectUrl + "/releases")));
+            _settingsMenu = ToContextMenu(settingsMenu);
+            _helpMenu = ToContextMenu(helpMenu);
 
             var status = new StatusStrip { SizingGrip = false };
             _statusText = new ToolStripStatusLabel { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
@@ -896,8 +902,8 @@ namespace AsusFanControlGUI
         {
             if (_tray != null)
                 Theme.ApplyMenu(_tray.ContextMenuStrip);
-            Theme.ApplyMenu(_settingsMenu.DropDown);
-            Theme.ApplyMenu(_helpMenu.DropDown);
+            Theme.ApplyMenu(_settingsMenu);
+            Theme.ApplyMenu(_helpMenu);
             Theme.ApplyMenu(_themeMenu.DropDown);
         }
 
@@ -935,15 +941,22 @@ namespace AsusFanControlGUI
             SendMessage(Handle, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
         }
 
+        static ContextMenuStrip ToContextMenu(ToolStripMenuItem source)
+        {
+            var menu = new ContextMenuStrip();
+            menu.Items.AddRange(source.DropDownItems.Cast<ToolStripItem>().ToArray());
+            return menu;
+        }
+
         void OnHeaderButton(HeaderBanner.CaptionButton button, Point screen)
         {
             switch (button)
             {
                 case HeaderBanner.CaptionButton.Settings:
-                    _settingsMenu.DropDown.Show(screen);
+                    ShowHeaderMenu(_settingsMenu, screen);
                     break;
                 case HeaderBanner.CaptionButton.Help:
-                    _helpMenu.DropDown.Show(screen);
+                    ShowHeaderMenu(_helpMenu, screen);
                     break;
                 case HeaderBanner.CaptionButton.Minimize:
                     WindowState = FormWindowState.Minimized;
@@ -952,6 +965,22 @@ namespace AsusFanControlGUI
                     Close();
                     break;
             }
+        }
+
+        /// <summary>
+        /// Opens a header menu once the click has finished (the header still holds the
+        /// mouse during MouseUp), with this window active so the menu has an owner.
+        /// </summary>
+        void ShowHeaderMenu(ContextMenuStrip menu, Point screen)
+        {
+            BeginInvoke(new Action(() =>
+            {
+                if (IsDisposed)
+                    return;
+                Activate();
+                Theme.ApplyMenu(menu);
+                menu.Show(_header, _header.PointToClient(screen));
+            }));
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
